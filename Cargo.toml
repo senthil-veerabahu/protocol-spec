@@ -1,0 +1,14 @@
+[package]
+name = "protocol-spec"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.43.0", features = ["io-util", "macros", "rt", "net"] }
+tokio-stream = "0.1.17"
+tokio-macros = { version = "0.2.0-alpha.6" }
+pin-project = "1.1.10"
+memchr = "2.7.4"
+
+
+
