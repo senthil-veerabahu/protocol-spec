@@ -30,6 +30,6 @@ let request_line_placeholder = SpecBuilder::new_composite("request_line".to_stri
 
 The above code will allow the protocol-spec parser to read the first line of typical http protocol
 ```
-"GET /index.html HTTP/1.1
+GET /index.html HTTP/1.1
 
 ```
