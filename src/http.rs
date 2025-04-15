@@ -211,7 +211,7 @@ impl RequestParser for HttpParser {
                 );
             }
             (_, _, _) => {
-                return Err(ParserError::TokenExpected { position: 0, message: "Expected Http Request first line  of the form <requestmethod> <httpversion> <requesturi>".to_string() });
+                return Err(ParserError::TokenExpected { line_pos:0, char_pos: 0, message: "Expected Http Request first line  of the form <requestmethod> <httpversion> <requesturi>".to_string() });
             }
         }
         //}
@@ -240,7 +240,7 @@ impl RequestParser for HttpParser {
                     match (key_option, value_option) {
                         (None, None) => {}
                         (Some(key), None) => {
-                            return Err(ParserError::TokenExpected { position: 0, message: format!("Expected http header {} to be of the form <requestmethod> <httpversion> <requesturi>", key) });
+                            return Err(ParserError::TokenExpected {line_pos:0,  char_pos: 0, message: format!("Expected http header {} to be of the form <requestmethod> <httpversion> <requesturi>", key) });
                         }
                         (Some(key), Some(value)) => {
                             http_request_info.add_info(

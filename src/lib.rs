@@ -1,3 +1,4 @@
+
 mod core {
     use crate::core::PlaceHolderType::OneOf;
     use std::{
@@ -16,9 +17,9 @@ mod core {
 
     #[derive(Debug)]
     pub enum ParserError {
-        
-        TokenExpected { position: u32, message: String },
-        InvalidToken { position: u32, message: String },
+        InvalidPlaceHolderTypeFound { line_pos:usize, char_pos: usize, message: String },
+        TokenExpected { line_pos:usize, char_pos: usize, message: String },
+        InvalidToken { line_pos:usize, char_pos: usize, message: String },
         MissingKey,
         IOError { error: std::io::Error },
     }
@@ -26,19 +27,22 @@ mod core {
     impl<'l> Display for ParserError {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
-                ParserError::TokenExpected { position, message } => {
-                    write!(f, "Token expected at position {} {}", position, message)
-                }
-                ParserError::InvalidToken { position, message } => {
-                    write!(f, "Invalid token at position {} {}", position, message)
-                }
+                ParserError::TokenExpected {line_pos, char_pos: position, message } => {
+                                write!(f, "Token expected at line {} char_pos {} {}",line_pos, position, message)
+                            }
+                ParserError::InvalidToken {line_pos,  char_pos, message } => {
+                                write!(f, "Invalid token at line {}  position {} {}",line_pos, char_pos, message)
+                            }
                 ParserError::IOError { error } => {
-                    write!(f, "IO Error {}", error)
-                }
+                                write!(f, "IO Error {}", error)
+                            }
                 ParserError::MissingKey => write!(
-                    f,
-                    "Key value pair is expected. But key is missing, only value is present "
-                ),
+                                f,
+                                "Key value pair is expected. But key is missing, only value is present "
+                            ),
+                ParserError::InvalidPlaceHolderTypeFound { line_pos, char_pos, message } => {
+                    write!(f, "Invalid placeholder type found at line {}  position {} {}",line_pos, char_pos, message)
+                },
             }
         }
     }
@@ -722,13 +726,15 @@ mod core {
                         return Ok(());
                     } else {
                         return Err(ParserError::InvalidToken {
-                            position: 0,
+                            line_pos: 0,
+                            char_pos: 0,
                             message: format!("Unexpected  tokens {}", item),
                         });
                     }
                 }
                 return Err(ParserError::InvalidToken {
-                    position: 0,
+                    line_pos: 0,
+                    char_pos: 0,
                     message: format!(
                         "Expected one of these tokens {:?}",
                         slice_to_string(self.data.as_slice())
@@ -771,7 +777,8 @@ mod core {
                 for item in &mut iter {
                     if !self.data.contains(&item) {
                         return Err(ParserError::InvalidToken {
-                            position: 0,
+                            line_pos: 0,
+                            char_pos: 0,
                             message: format!("Unexpected  tokens {}", item),
                         });
                     }

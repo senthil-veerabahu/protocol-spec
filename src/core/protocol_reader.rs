@@ -1,10 +1,7 @@
 use memchr::memmem::Finder;
 use pin_project::pin_project;
 use std::{
-    future::Future,
-    io::{self},
-    pin::Pin,
-    task::{Context, Poll},
+     future::Future, io::{self}, pin::Pin, task::{Context, Poll}
 };
 use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
 use tokio_stream::Stream;
@@ -117,6 +114,9 @@ where
     buf: Vec<u8>,
     marked_pos: usize,
     marked: bool,
+    line_count: usize,
+    char_pos: usize,
+    char_pos_line: usize,
 }
 
 pub struct ProtoStream<R>
@@ -269,7 +269,25 @@ where
             buf: Vec::with_capacity(cap),
             marked_pos: 0,
             marked: false,
+            line_count: 0,
+            char_pos: 0,
+            char_pos_line: 0,
         }
+    }
+
+    fn increment_line(&mut self) {
+        self.line_count += 1;
+        self.char_pos_line += 1;
+        self.char_pos += 1;
+    }
+    fn increment_char_pos(&mut self) {        
+        self.char_pos_line += 1;
+        self.char_pos += 1;
+    }
+
+    fn increment_char_pos_by(&mut self, count:usize) {        
+        self.char_pos_line += count;
+        self.char_pos += count;
     }
 
     #[allow(unused)]
@@ -368,15 +386,9 @@ where
                     }
                 }
             }
-            Poll::Ready(Err(ParserError::TokenExpected {
-                position: 0,
-                message: "Expected token not found, EOF reached".to_string(),
-            }))
+            Poll::Ready(Err(protocol_reader.error_token_expected_eof_reached()))
         } else {
-            Poll::Ready(Err(ParserError::TokenExpected {
-                position: 0,
-                message: "Expected token not found, EOF reached".to_string(),
-            }))
+            Poll::Ready(Err(protocol_reader.error_token_expected_eof_reached()))
         }
     }
 }
@@ -436,9 +448,19 @@ where
             }
         }
         Poll::Ready(Err(ParserError::TokenExpected {
-            position: 0,
+            line_pos: protocol_reader.line_count,
+            char_pos: protocol_reader.char_pos_line,
             message: "Expected token not found, EOF reached".to_string(),
         }))
+    }
+}
+
+#[allow(unused)]
+fn token_expected_error(line_index:usize, line_char_pos:usize) -> ParserError {
+    ParserError::TokenExpected {
+        line_pos: line_index,
+            char_pos: line_char_pos,
+        message: "Expected token not found, EOF reached".to_string(),
     }
 }
 
@@ -469,7 +491,8 @@ where
                             continue;
                         } else {
                             return Some(Poll::Ready(Err(ParserError::TokenExpected {
-                                position: 0,
+                                line_pos: protocol_reader.line_count,
+                                char_pos: protocol_reader.char_pos_line,
                                 message: "Expected token not found, EOF reached".to_string(),
                             })));
                         }
@@ -503,7 +526,8 @@ where
                         continue;
                     } else {
                         return Some(Poll::Ready(Err(ParserError::TokenExpected {
-                            position: 0,
+                            line_pos: protocol_reader.line_count,
+                            char_pos: protocol_reader.char_pos_line,
                             message: "Expected token not found, EOF reached".to_string(),
                         })));
                     }
@@ -520,7 +544,8 @@ where
             return Some(Poll::Ready(Ok(pos)));
         } else {
             return Some(Poll::Ready(Err(ParserError::TokenExpected {
-                position: 0,
+                line_pos: protocol_reader.line_count,
+                char_pos: protocol_reader.char_pos_line,
                 message: "Expected token not found, EOF reached".to_string(),
             })));
         }
@@ -662,11 +687,19 @@ where
                             let value_type = self
                                 .read_placeholder_as_string(constituent, input.to_string())
                                 .await?;
+                            match &value_type {
+                                ValueType::String(data) => {
+                                    self.increment_char_pos_by(input.len());
+                                }
+                                _ => {}
+                            }
                             update_key_value(
                                 request_info,
                                 &mut key,                               
                                 constituent,
                                 value_type,
+                                self.line_count,
+                                self.char_pos_line,
                             )?;
                         }
                         PlaceHolderType::AnyString => {
@@ -674,21 +707,21 @@ where
                             let value_type = self
                                 .read_delimited_string(constituent, constituents, &mut i)
                                 .await?;
+                            match &value_type {
+                                ValueType::String(data) => {
+                                    self.increment_char_pos_by(data.len());
+                                }
+                                _ => {}
+                            }
                             update_key_value(
                                 request_info,
                                 &mut key,                                
                                 constituent,
                                 value_type,
+                                self.line_count,
+                                self.char_pos_line,
                             )?;
-                            /* match &value_type {
-                                ValueType::String(data) => {
-                                    println!("read any string {}", data);
-                                    Self::update_key(&mut key, constituent, Some(data.to_owned()));
-                                    request_info
-                                        .add_info(key.as_ref().unwrap().to_owned(), value_type);
-                                }
-                                _ => {}
-                            } */
+                             
                             i += 1;
                         }
                         PlaceHolderType::Stream => {
@@ -705,23 +738,17 @@ where
                                 ValueType::String(str) => {
                                     update_key(&mut key, constituent, Some(str.to_owned()));
                                     if items.contains(str) {
+                                        self.increment_char_pos_by(str.len());
                                         request_info.add_info(key.unwrap(), value_type);
                                         key = None;
+                                        
                                         //return Ok(());
                                     } else {
-                                        return Err(ParserError::TokenExpected {
-                                            position: 0,
-                                            message: "Expected token not found, EOF reached"
-                                                .to_string(),
-                                        });
+                                        return Err(self.error_token_expected_eof_reached());
                                     }
                                 }
                                 _ => {
-                                    return Err(ParserError::TokenExpected {
-                                        position: 0,
-                                        message: "Expected token not found, EOF reached"
-                                            .to_string(),
-                                    });
+                                    return Err(self.error_token_expected_eof_reached());
                                 }
                             }
                         }
@@ -730,16 +757,20 @@ where
                             let result = self
                                 .read_placeholder_as_string(constituent, " ".to_string())
                                 .await?;
+                            self.increment_char_pos();
                         }
                         PlaceHolderType::NewLine => {
                             let result = self
                                 .read_placeholder_as_string(constituent, "\n".to_string())
                                 .await?;
+                            self.increment_line();
+
                         }
                         PlaceHolderType::Delimiter(delim) => {
                             let result = self
                                 .read_placeholder_as_string(constituent, delim.to_string())
                                 .await?;
+                            self.increment_char_pos();
                         }
                     }
                     i += 1;
@@ -749,6 +780,27 @@ where
         Ok(())
     }
 
+    fn error_token_expected_eof_reached(&mut self) -> ParserError {
+        ParserError::TokenExpected {
+            line_pos: self.line_count,
+            char_pos: self.char_pos_line,
+            message: "Expected token not found, EOF reached"
+                .to_string(),
+        }
+    }
+
+    #[allow(unused)]
+    fn error_unexpected_token_found(&mut self, unexpected_token: String) -> ParserError {
+        ParserError::TokenExpected {
+            line_pos: self.line_count,
+            char_pos: self.char_pos_line,
+            message: format!("Expected token not found, instead found token {}", unexpected_token)
+                .to_string(),
+        }
+    }
+
+    
+    
     async fn read_delimited_string(
         &mut self,
         placeholder: &Placeholder,
@@ -773,10 +825,12 @@ where
 
                 PlaceHolderType::Space => " ",
                 PlaceHolderType::ExactString(input) => input,
+                
                 _ => {
-                    return Err(ParserError::TokenExpected {
-                        position: 0,
-                        message: "Expected one of the delimiter type or known string".to_string(),
+                    return Err(ParserError::InvalidPlaceHolderTypeFound {
+                        line_pos: self.line_count,
+                        char_pos: self.char_pos_line,
+                        message: "Expected one of the delimiter type or known string, but found PlaceHolderType of Composite".to_string(),
                     });
                 }
             };
@@ -789,9 +843,10 @@ where
             return Ok(());
              */
         } else {
-            return Err(ParserError::TokenExpected {
-                position: 0,
-                message: "Expected delimiter".to_string(),
+            return Err(ParserError::InvalidPlaceHolderTypeFound { 
+                line_pos: self.line_count,
+                char_pos: self.char_pos_line,
+                message: "Expected one of the delimiter type or known string, but reached end of child placeholders".to_string(),
             });
         }
     }
@@ -802,6 +857,8 @@ fn update_key_value<RI>(
     key: &mut Option<String>,    
     constituent: &Placeholder,
     result: ValueType,
+    line_pos: usize,
+    char_pos: usize,
 ) -> Result<(), ParserError>
 where
     RI: RequestInfo,
@@ -831,9 +888,11 @@ where
             _ => {}
         },
         _ => {
-            Err(ParserError::TokenExpected {
-                position: 0,
-                message: "Expected token not found".to_string(),
+            Err(
+                ParserError::TokenExpected {
+                line_pos: line_pos,
+                char_pos: char_pos,
+                message: "Expected String token not found".to_string(),
             })?;
         }
     };
