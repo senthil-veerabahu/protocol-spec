@@ -88,7 +88,7 @@ trait PlaceHolderRead {
         self: &'a mut Self,
         placeholder: &'b Placeholder,
         input: String,
-    ) -> Result<ValueType, ParserError>
+    ) -> Result<Option<ValueType>, ParserError>
     where
         'a: 'b;
 
@@ -97,7 +97,7 @@ trait PlaceHolderRead {
         self: &'a mut Self,
         placeholder: &'b Placeholder,
         delimiter: String,
-    ) -> Result<ValueType, ParserError>
+    ) -> Result<Option<ValueType>, ParserError>
     where
         'a: 'b;
 }
@@ -114,9 +114,9 @@ where
     buf: Vec<u8>,
     marked_pos: usize,
     marked: bool,
-    line_count: usize,
-    char_pos: usize,
-    char_pos_line: usize,
+    line_index: usize,
+    char_index: usize,
+    char_index_in_line: usize,
 }
 
 pub struct ProtoStream<R>
@@ -261,7 +261,7 @@ where
     }
 
     #[allow(unused)]
-    fn new(reader: R, cap: usize) -> Self {
+    pub(super) fn new(reader: R, cap: usize) -> Self {
         ProtocolBuffReader {
             inner: reader,
             cap,
@@ -269,25 +269,29 @@ where
             buf: Vec::with_capacity(cap),
             marked_pos: 0,
             marked: false,
-            line_count: 0,
-            char_pos: 0,
-            char_pos_line: 0,
+            line_index: 0,
+            char_index: 0,
+            char_index_in_line: 0,
         }
     }
 
-    fn increment_line(&mut self) {
-        self.line_count += 1;
-        self.char_pos_line += 1;
-        self.char_pos += 1;
+    fn increment_line_index(&mut self) {
+        self.line_index += 1;
+        self.char_index_in_line = 0;
+        self.char_index += 1;
     }
-    fn increment_char_pos(&mut self) {        
-        self.char_pos_line += 1;
-        self.char_pos += 1;
+    fn increment_char_index(&mut self) {        
+        self.char_index_in_line += 1;
+        self.char_index += 1;
     }
 
-    fn increment_char_pos_by(&mut self, count:usize) {        
-        self.char_pos_line += count;
-        self.char_pos += count;
+    fn get_error_char_index(&self) -> usize {
+        self.char_index_in_line + 1
+    }
+
+    fn increment_char_index_by(&mut self, count:usize) {        
+        self.char_index_in_line += count;
+        self.char_index += count;
     }
 
     #[allow(unused)]
@@ -354,7 +358,7 @@ impl<'a, R> Future for ReadPlaceHolderUntil<'a, R>
 where
     R: AsyncBufRead + Unpin,
 {
-    type Output = Result<ValueType, ParserError>;
+    type Output = Result<Option<ValueType>, ParserError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -362,6 +366,7 @@ where
         let delimiter = this.delimiter;
         let protocol_reader = &mut this.protocol_reader;
         if protocol_reader.pos < (protocol_reader.cap - 1) {
+            protocol_reader.mark_if_optional(placeholder);
             //let pinned_reader = Pin::new(&mut protocol_reader.inner);
             if let Some(value) = perform_search(cx, placeholder, delimiter, protocol_reader) {
                 match value {
@@ -375,10 +380,16 @@ where
                             );
 
                             protocol_reader.consume(matched_portion.len() + delimiter.len());
-                            return Poll::Ready(Ok(place_holder_value));
+                            protocol_reader.unmark_if_optional(placeholder);
+                            return Poll::Ready(Ok(Some(place_holder_value)));
                         }
                         Err(e) => {
-                            return Poll::Ready(Err(e));
+                            protocol_reader.reset_if_optional(placeholder);
+                            if placeholder.optional {
+                                return Poll::Ready(Ok(None));
+                            } else {
+                                return Poll::Ready(Err(e));
+                            }
                         }
                     },
                     Poll::Pending => {
@@ -414,7 +425,7 @@ impl<'a, R> Future for ReadString<'a, R>
 where
     R: AsyncBufRead + Unpin,
 {
-    type Output = Result<ValueType, ParserError>;
+    type Output = Result<Option<ValueType>, ParserError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -424,6 +435,7 @@ where
         let protocol_reader = &mut this.protocol_reader;
         //if !protocol_reader.buf_has_enough_data(input.len()) {
         //let pinned_reader = Pin::new(&mut protocol_reader.inner);
+        protocol_reader.mark_if_optional(placeholder);
         if let Some(value) = read_string(cx, placeholder, input, protocol_reader) {
             match value {
                 Poll::Ready(result) => match result {
@@ -436,10 +448,16 @@ where
                         );
 
                         protocol_reader.consume(input.len());
-                        return Poll::Ready(Ok(place_holder_value));
+                        protocol_reader.unmark_if_optional(placeholder);
+                        return Poll::Ready(Ok(Some(place_holder_value)));
                     }
                     Err(e) => {
-                        return Poll::Ready(Err(e));
+                        protocol_reader.reset_if_optional(placeholder);
+                            if placeholder.optional {
+                                return Poll::Ready(Ok(None));
+                            } else {
+                                return Poll::Ready(Err(e));
+                            }
                     }
                 },
                 Poll::Pending => {
@@ -448,8 +466,8 @@ where
             }
         }
         Poll::Ready(Err(ParserError::TokenExpected {
-            line_pos: protocol_reader.line_count,
-            char_pos: protocol_reader.char_pos_line,
+            line_index: protocol_reader.line_index,
+            char_index: protocol_reader.char_index_in_line + 1,
             message: "Expected token not found, EOF reached".to_string(),
         }))
     }
@@ -458,8 +476,8 @@ where
 #[allow(unused)]
 fn token_expected_error(line_index:usize, line_char_pos:usize) -> ParserError {
     ParserError::TokenExpected {
-        line_pos: line_index,
-            char_pos: line_char_pos,
+        line_index,
+            char_index: line_char_pos,
         message: "Expected token not found, EOF reached".to_string(),
     }
 }
@@ -491,8 +509,8 @@ where
                             continue;
                         } else {
                             return Some(Poll::Ready(Err(ParserError::TokenExpected {
-                                line_pos: protocol_reader.line_count,
-                                char_pos: protocol_reader.char_pos_line,
+                                line_index: protocol_reader.line_index,
+                                char_index: protocol_reader.char_index_in_line + 1,
                                 message: "Expected token not found, EOF reached".to_string(),
                             })));
                         }
@@ -526,8 +544,8 @@ where
                         continue;
                     } else {
                         return Some(Poll::Ready(Err(ParserError::TokenExpected {
-                            line_pos: protocol_reader.line_count,
-                            char_pos: protocol_reader.char_pos_line,
+                            line_index: protocol_reader.line_index,
+                            char_index: protocol_reader.char_index_in_line,
                             message: "Expected token not found, EOF reached".to_string(),
                         })));
                     }
@@ -544,8 +562,8 @@ where
             return Some(Poll::Ready(Ok(pos)));
         } else {
             return Some(Poll::Ready(Err(ParserError::TokenExpected {
-                line_pos: protocol_reader.line_count,
-                char_pos: protocol_reader.char_pos_line,
+                line_index: protocol_reader.line_index,
+                char_index: protocol_reader.get_error_char_index(),
                 message: "Expected token not found, EOF reached".to_string(),
             })));
         }
@@ -560,7 +578,7 @@ where
         self: &'a mut Self,
         placeholder: &'b Placeholder,
         delimiter: String,
-    ) -> Result<ValueType, ParserError>
+    ) -> Result<Option<ValueType>, ParserError>
     where
         'a: 'b,
     {
@@ -572,7 +590,7 @@ where
         self: &'a mut Self,
         placeholder: &'b Placeholder,
         input: String,
-    ) -> Result<ValueType, ParserError>
+    ) -> Result<Option<ValueType>, ParserError>
     where
         'a: 'b,
     {
@@ -625,8 +643,27 @@ where
         }
     } */
 
+   pub fn mark_if_optional(&mut self, placeholder: &Placeholder){
+        if placeholder.optional {
+            self.mark();
+        }
+   }
+
+   pub fn reset_if_optional(&mut self, placeholder: &Placeholder){
+        if placeholder.optional {
+            self.reset();
+        }
+    }
+
+    pub fn unmark_if_optional(&mut self, placeholder: &Placeholder){
+        if placeholder.optional {
+            self.unmark();
+        }
+    }
+
+
     #[allow(unused)]
-    async fn parse_composite<RI>(
+    pub(super) async fn parse_composite<RI>(
         &mut self,
         placeholder: &Placeholder,
         request_info: &mut RI,
@@ -684,43 +721,61 @@ where
                             }
                         }
                         PlaceHolderType::ExactString(input) => {
+                            //self.mark_if_optional(constituent);
                             let value_type = self
                                 .read_placeholder_as_string(constituent, input.to_string())
-                                .await?;
-                            match &value_type {
-                                ValueType::String(data) => {
-                                    self.increment_char_pos_by(input.len());
+                                .await;
+                            /* if value_type.is_err() {
+                                self.reset_if_optional(placeholder);
+                            }else */{
+                                match value_type {
+                                    Ok(Some(v)) => {
+                                        self.increment_char_index_by(input.len());
+                                        update_key_value(
+                                            request_info,
+                                            &mut key,                               
+                                            constituent,
+                                            v,
+                                            self.line_index,
+                                            self.char_index_in_line,
+                                        )?;
+                                    }
+
+                                    Ok(None) => {
+                                    }
+                                    Err(e) => {
+                                        if !placeholder.optional{
+                                            return Err(e);
+                                        }
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
-                            update_key_value(
-                                request_info,
-                                &mut key,                               
-                                constituent,
-                                value_type,
-                                self.line_count,
-                                self.char_pos_line,
-                            )?;
                         }
                         PlaceHolderType::AnyString => {
                             //Self::update_key(&mut key, constituent, None);
-                            let value_type = self
+                            let value_type_option = self
                                 .read_delimited_string(constituent, constituents, &mut i)
                                 .await?;
-                            match &value_type {
-                                ValueType::String(data) => {
-                                    self.increment_char_pos_by(data.len());
+
+
+                            match &value_type_option {
+                                Some(ValueType::String(data)) => {
+                                    self.increment_char_index_by(data.len());
+                                    update_key_value(
+                                        request_info,
+                                        &mut key,                                
+                                        constituent,
+                                        ValueType::String(data.to_owned()),
+                                        self.line_index,
+                                        self.char_index_in_line,
+                                    )?;
+                                }
+                                None => {
                                 }
                                 _ => {}
                             }
-                            update_key_value(
-                                request_info,
-                                &mut key,                                
-                                constituent,
-                                value_type,
-                                self.line_count,
-                                self.char_pos_line,
-                            )?;
+                            
                              
                             i += 1;
                         }
@@ -729,17 +784,17 @@ where
                             todo!()
                         }
                         PlaceHolderType::OneOf(items) => {
-                            let value_type = self
+                            let value_type_option = self
                                 .read_delimited_string(constituent, constituents, &mut i)
                                 .await?;
                             i += 1;
 
-                            match &value_type {
-                                ValueType::String(str) => {
+                            match &value_type_option {
+                                Some(ValueType::String(str)) => {
                                     update_key(&mut key, constituent, Some(str.to_owned()));
                                     if items.contains(str) {
-                                        self.increment_char_pos_by(str.len());
-                                        request_info.add_info(key.unwrap(), value_type);
+                                        self.increment_char_index_by(str.len());
+                                        request_info.add_info(key.unwrap(), ValueType::String(str.to_owned()));
                                         key = None;
                                         
                                         //return Ok(());
@@ -747,6 +802,7 @@ where
                                         return Err(self.error_token_expected_eof_reached());
                                     }
                                 }
+                                None => {}
                                 _ => {
                                     return Err(self.error_token_expected_eof_reached());
                                 }
@@ -757,20 +813,20 @@ where
                             let result = self
                                 .read_placeholder_as_string(constituent, " ".to_string())
                                 .await?;
-                            self.increment_char_pos();
+                            self.increment_char_index();
                         }
                         PlaceHolderType::NewLine => {
                             let result = self
                                 .read_placeholder_as_string(constituent, "\n".to_string())
                                 .await?;
-                            self.increment_line();
+                            self.increment_line_index();
 
                         }
                         PlaceHolderType::Delimiter(delim) => {
                             let result = self
                                 .read_placeholder_as_string(constituent, delim.to_string())
                                 .await?;
-                            self.increment_char_pos();
+                            self.increment_char_index();
                         }
                     }
                     i += 1;
@@ -782,8 +838,8 @@ where
 
     fn error_token_expected_eof_reached(&mut self) -> ParserError {
         ParserError::TokenExpected {
-            line_pos: self.line_count,
-            char_pos: self.char_pos_line,
+            line_index: self.line_index,
+            char_index: self.get_error_char_index(),
             message: "Expected token not found, EOF reached"
                 .to_string(),
         }
@@ -792,8 +848,8 @@ where
     #[allow(unused)]
     fn error_unexpected_token_found(&mut self, unexpected_token: String) -> ParserError {
         ParserError::TokenExpected {
-            line_pos: self.line_count,
-            char_pos: self.char_pos_line,
+            line_index: self.line_index,
+            char_index: self.get_error_char_index(),
             message: format!("Expected token not found, instead found token {}", unexpected_token)
                 .to_string(),
         }
@@ -806,11 +862,13 @@ where
         placeholder: &Placeholder,
         constituents: &Vec<Placeholder>,
         i: &mut usize,
-    ) -> Result<ValueType, ParserError> {
+    ) -> Result<Option<ValueType>, ParserError> {
         let delimiter = self.get_delimiter(constituents, i).await?;
-        Ok(self
-            .read_placeholder_until(placeholder, delimiter.to_owned())
-            .await?)
+        let result = self
+        .read_placeholder_until(placeholder, delimiter.to_owned())
+        .await?;
+    Ok(result)
+        
     }
 
     async fn get_delimiter(
@@ -828,8 +886,8 @@ where
                 
                 _ => {
                     return Err(ParserError::InvalidPlaceHolderTypeFound {
-                        line_pos: self.line_count,
-                        char_pos: self.char_pos_line,
+                        line_index: self.line_index,
+                        char_index: self.get_error_char_index(),
                         message: "Expected one of the delimiter type or known string, but found PlaceHolderType of Composite".to_string(),
                     });
                 }
@@ -844,8 +902,8 @@ where
              */
         } else {
             return Err(ParserError::InvalidPlaceHolderTypeFound { 
-                line_pos: self.line_count,
-                char_pos: self.char_pos_line,
+                line_index: self.line_index,
+                char_index: self.get_error_char_index(),
                 message: "Expected one of the delimiter type or known string, but reached end of child placeholders".to_string(),
             });
         }
@@ -890,8 +948,8 @@ where
         _ => {
             Err(
                 ParserError::TokenExpected {
-                line_pos: line_pos,
-                char_pos: char_pos,
+                line_index: line_pos,
+                char_index: char_pos,
                 message: "Expected String token not found".to_string(),
             })?;
         }
@@ -915,11 +973,12 @@ mod tests {
     use super::{PlaceHolderRead, ProtocolBuffReader};
 
     fn assert_result_has_string(
-        result: Result<crate::core::ValueType, crate::core::ParserError>,
+        result: Result<Option<crate::core::ValueType>, crate::core::ParserError>,
         data: String,
     ) {
-        match result.unwrap() {
-            crate::core::ValueType::String(value) => {
+        match result {
+
+            Ok(Some(crate::core::ValueType::String(value))) => {
                 assert!(value == data);
             }
             _ => {
@@ -937,7 +996,7 @@ mod tests {
                 &Placeholder {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: crate::core::PlaceHolderIdentifier::Name("name".to_string()),
-                    constituents: None,
+                    constituents: None, optional:false,
                 },
                 "::".to_string(),
             )
@@ -956,6 +1015,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: crate::core::PlaceHolderIdentifier::Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "::".to_string(),
             )
@@ -973,6 +1033,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: crate::core::PlaceHolderIdentifier::Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "::".to_string(),
             )
@@ -990,6 +1051,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 " ".to_string(),
             )
@@ -1002,6 +1064,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "\n".to_string(),
             )
@@ -1019,6 +1082,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "Hello".to_string(),
             )
@@ -1031,6 +1095,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 " ".to_string(),
             )
@@ -1043,6 +1108,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "World".to_string(),
             )
@@ -1057,6 +1123,7 @@ mod tests {
                         "name".to_string(),
                     ),
                     constituents: None,
+                    optional:false,
                 },
                 "\n".to_string(),
             )
@@ -1075,6 +1142,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "Hello".to_string(),
             )
@@ -1088,6 +1156,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "Hello".to_string(),
             )
@@ -1096,7 +1165,7 @@ mod tests {
         protocol_reader.reset();
 
         match value {
-            crate::core::ValueType::String(value) => {
+            Some(crate::core::ValueType::String(value)) => {
                 assert!(value == "Hello".to_string());
             }
             _ => {
@@ -1116,6 +1185,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "Hello".to_string(),
             )
@@ -1159,6 +1229,7 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "Hello".to_string(),
             )
@@ -1185,13 +1256,14 @@ mod tests {
                     place_holder_type: PlaceHolderType::AnyString,
                     name: Name("name".to_string()),
                     constituents: None,
+                    optional:false,
                 },
                 "ld\n".to_string(),
             )
             .await
             .unwrap();
         match data {
-            crate::core::ValueType::String(value) => {
+            Some(crate::core::ValueType::String(value)) => {
                 assert!(value == "ld\n".to_string());
             }
             _ => {
@@ -1203,11 +1275,11 @@ mod tests {
     #[tokio::test]
     async fn parse_composite_test() {
         let root_placeholder =
-            Placeholder::new(Name("root".to_string()), None, PlaceHolderType::Composite);
+            Placeholder::new(Name("root".to_string()), None, PlaceHolderType::Composite, false);
 
         let mut spec_builder = SpecBuilder(root_placeholder);
 
-        let request_line_placeholder = SpecBuilder::new_composite("request_line".to_string())
+        let request_line_placeholder = SpecBuilder::new_composite("request_line".to_string(), false)
             .expect_one_of_string(
                 vec![
                     "GET".to_string(),
@@ -1217,26 +1289,27 @@ mod tests {
                     "OPTIONS".to_string(),
                 ],
                 InlineKeyWithValue("request_method".to_string()),
+                false
             )
             .expect_space()
-            .expect_string(InlineKeyWithValue("request_uri".to_string()))
+            .expect_string(InlineKeyWithValue("request_uri".to_string()),false)
             .expect_space()
-            .expect_string(InlineKeyWithValue("protocol_version".to_string()))
+            .expect_string(InlineKeyWithValue("protocol_version".to_string()), false)
             .expect_newline()
             .build();
 
-        let mut header_placeholder_builder = SpecBuilder::new_composite("header".to_string());
+        let mut header_placeholder_builder = SpecBuilder::new_composite("header".to_string(), false);
         let header_place_holder = header_placeholder_builder
-            .expect_string(crate::core::PlaceHolderIdentifier::Key)
+            .expect_string(crate::core::PlaceHolderIdentifier::Key, false)
             .expect_delimiter(": ".to_string())
-            .expect_string(crate::core::PlaceHolderIdentifier::Value)
+            .expect_string(crate::core::PlaceHolderIdentifier::Value, false)
             .expect_newline()
             .build();
 
         spec_builder.expect_composite(request_line_placeholder, "first_line".to_owned());
         spec_builder.expect_newline();
         spec_builder.expect_repeat_many(header_place_holder, "headers".to_owned());
-        spec_builder.expect_exact_string(InlineKeyWithValue("data".to_string()));
+        spec_builder.expect_exact_string(InlineKeyWithValue("data".to_string()), "test123".to_string(), false);
         spec_builder.expect_newline();
 
         let placehoder = spec_builder.build();
@@ -1290,8 +1363,130 @@ mod tests {
         }
     }
 
+
+    
+    #[tokio::test]
+    async fn test_read_unexpected_token_error() {
+        let data = b"Hello World\n";
+        let mut spec = SpecBuilder::new("root".to_owned());
+        let root = spec.expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)
+            .expect_space()
+            .expect_exact_string(InlineKeyWithValue("second_word".to_string()), "World".to_string(), false)
+            .expect_space()
+            .build();
+        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+
+        let mut request_info = TestRequestInfo::new();
+        let result = protocol_reader.parse_composite(&root, &mut request_info).await;
+        
+
+        
+        match result{
+            Ok(_) => {
+                assert!(false, "expected unexpected token error, but got success");
+            }
+            Err(e   ) => {
+                match e {
+                    crate::core::ParserError::TokenExpected { line_index, char_index, message } => {
+                        assert!(line_index == 0);
+                        assert!(char_index == 11);
+                        assert!(message.contains( "Expected token not found"));
+                    }
+                    _ => {
+                        assert!(false, "expected unexpected token error, but got error");
+                    }
+                    
+                }
+
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_token_eof_error() {
+        let data = b"Hello World\n";
+        let mut spec = SpecBuilder::new("root".to_owned());
+        let root = spec.expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)
+            .expect_space()
+            .expect_exact_string(InlineKeyWithValue("second_word".to_string()), "World".to_string(),false)
+            .expect_newline()
+            .expect_newline()
+            .build();
+        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+
+        let mut request_info = TestRequestInfo::new();
+        let result = protocol_reader.parse_composite(&root, &mut request_info).await;
+        
+
+        
+        match result{
+            Ok(_) => {
+                assert!(false, "expected unexpected token error, but got success");
+            }
+            Err(e   ) => {
+                match e {
+                    crate::core::ParserError::TokenExpected { line_index, char_index, message } => {
+                        assert!(line_index == 1);
+                        assert!(char_index == 0);
+                        assert!(message.contains( "EOF reached"));
+                    }
+                    _ => {
+                        assert!(false, "expected unexpected token error, but got error");
+                    }
+                    
+                }
+
+            }
+        }
+    }
+
+
+    #[tokio::test]
+    async fn test_proto_optional_test() {
+        let data = b"Hello \n";
+        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+        let spec = SpecBuilder::new("root".to_owned())
+            .expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)
+            .expect_space()
+            .expect_exact_string(InlineKeyWithValue("second_word".to_string()), "World".to_string(), true)
+            .expect_newline()
+            .build();
+
+        let mut request_info = TestRequestInfo::new();
+        let result = protocol_reader.parse_composite(&spec, &mut request_info).await;
+        match result {
+            Ok(_) => {
+                let first_word = request_info.get_info("first_word".to_string()).unwrap();
+                match first_word {
+                    crate::core::ValueType::String(value) => {
+                        assert!(*value == "Hello".to_string());
+                    }
+                    _ => {
+                        assert!(false);
+                    }
+                }
+                let second_word = request_info.get_info("second_word".to_string());
+                
+                assert!(second_word.is_none());
+            }
+            Err(e) => {
+                assert!(false, "expected success, but got error: {:?}", e);
+            }
+        }
+
+        
+        
+    }
+
+
     #[derive(Default)]
     struct TestRequestInfo(HashMap<String, ValueType>);
+
+    impl TestRequestInfo {
+        fn new() -> Self {
+            TestRequestInfo(HashMap::new())
+        }
+    }
 
     impl RequestInfo for TestRequestInfo {
         fn add_info(&mut self, key: String, value: ValueType) {

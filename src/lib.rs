@@ -1,11 +1,16 @@
-
 mod core {
-    use crate::core::PlaceHolderType::OneOf;
-    use std::{
-        fmt::{Display, Formatter}, mem::{self}
-    };
-    use tokio::io::{AsyncRead, BufReader};
     use crate::core::PlaceHolderIdentifier::Name;
+    use crate::core::PlaceHolderType::OneOf;
+    use protocol_reader::ProtocolBuffReader;
+    
+    use std::{
+        fmt::{Display, Formatter},
+        mem::{self},
+    };
+    use tokio::{
+        io::{AsyncRead, BufReader},
+        net::TcpListener,
+    };
 
     #[allow(dead_code)]
     pub trait ProtocolInfo {
@@ -17,32 +22,70 @@ mod core {
 
     #[derive(Debug)]
     pub enum ParserError {
-        InvalidPlaceHolderTypeFound { line_pos:usize, char_pos: usize, message: String },
-        TokenExpected { line_pos:usize, char_pos: usize, message: String },
-        InvalidToken { line_pos:usize, char_pos: usize, message: String },
+        InvalidPlaceHolderTypeFound {
+            line_index: usize,
+            char_index: usize,
+            message: String,
+        },
+        TokenExpected {
+            line_index: usize,
+            char_index: usize,
+            message: String,
+        },
+        InvalidToken {
+            line_index: usize,
+            char_index: usize,
+            message: String,
+        },
         MissingKey,
-        IOError { error: std::io::Error },
+        IOError {
+            error: std::io::Error,
+        },
     }
 
     impl<'l> Display for ParserError {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
-                ParserError::TokenExpected {line_pos, char_pos: position, message } => {
-                                write!(f, "Token expected at line {} char_pos {} {}",line_pos, position, message)
-                            }
-                ParserError::InvalidToken {line_pos,  char_pos, message } => {
-                                write!(f, "Invalid token at line {}  position {} {}",line_pos, char_pos, message)
-                            }
+                ParserError::TokenExpected {
+                    line_index: line_pos,
+                    char_index: position,
+                    message,
+                } => {
+                    write!(
+                        f,
+                        "Token expected at line {} char_pos {} {}",
+                        line_pos, position, message
+                    )
+                }
+                ParserError::InvalidToken {
+                    line_index: line_pos,
+                    char_index: char_pos,
+                    message,
+                } => {
+                    write!(
+                        f,
+                        "Invalid token at line {}  position {} {}",
+                        line_pos, char_pos, message
+                    )
+                }
                 ParserError::IOError { error } => {
-                                write!(f, "IO Error {}", error)
-                            }
+                    write!(f, "IO Error {}", error)
+                }
                 ParserError::MissingKey => write!(
-                                f,
-                                "Key value pair is expected. But key is missing, only value is present "
-                            ),
-                ParserError::InvalidPlaceHolderTypeFound { line_pos, char_pos, message } => {
-                    write!(f, "Invalid placeholder type found at line {}  position {} {}",line_pos, char_pos, message)
-                },
+                    f,
+                    "Key value pair is expected. But key is missing, only value is present "
+                ),
+                ParserError::InvalidPlaceHolderTypeFound {
+                    line_index: line_pos,
+                    char_index: char_pos,
+                    message,
+                } => {
+                    write!(
+                        f,
+                        "Invalid placeholder type found at line {}  position {} {}",
+                        line_pos, char_pos, message
+                    )
+                }
             }
         }
     }
@@ -171,7 +214,7 @@ mod core {
         fn get_value(&self) -> Value<T>;
     } */
 
-/*     #[allow(unused)]
+    /*     #[allow(unused)]
     struct Value<T>(T); */
 
     /*impl <T> ValueExtractor<T> for Value<T>{
@@ -249,6 +292,30 @@ mod core {
         fn add_info(&mut self, key: String, value: ValueType);
     }
 
+    pub trait ResponseInfo: Default {
+        #[allow(unused)]
+        fn get_info(&self, key: String) -> Option<&ValueType>;
+
+        #[allow(unused)]
+        fn add_info(&mut self, key: String, value: ValueType);
+    }
+
+    #[allow(unused)]
+    pub trait RequestInfoBuilder<RQI>
+    where
+        RQI: RequestInfo,
+    {
+        fn build(&self) -> RQI;
+    }
+
+    #[allow(unused)]
+    pub trait ResponseInfoBuilder<RSI>
+    where
+        RSI: ResponseInfo,
+    {
+        fn build(&self) -> RSI;
+    }
+
     pub trait RequestHandler {}
 
     #[allow(unused)]
@@ -256,6 +323,8 @@ mod core {
         name: ProtocolVersion,
         transport: Transport,
         format: ProtocolFormat,
+        request_place_holder: Placeholder,
+        response_place_holder: Placeholder,
     }
 
     #[allow(unused)]
@@ -269,6 +338,174 @@ mod core {
         Text,
         Binary,
     }
+
+    #[allow(unused)]
+    pub struct ProtocolBuilder<RQI, RSI>
+    where
+        RQI: RequestInfo,
+        RSI: ResponseInfo,
+    {
+        name: Option<String>,
+        version: Option<String>,
+        transport: Option<Transport>,
+        format: Option<ProtocolFormat>,
+        request_info: Option<RQI>,
+        response_info: Option<RSI>,
+    }
+
+    #[allow(unused)]
+    pub enum ServerError {
+        StartError(String),
+        StopError,
+        RequestError(ParserError),
+        ResponseError(ParserError),
+        IOError(std::io::Error),
+    }
+
+    pub trait Server<RQI, RSI>
+    where
+        RQI: RequestInfo,
+        RSI: ResponseInfo,
+    {
+        #[allow(unused)]
+        async fn start(&'static mut self) -> Result<(), ServerError>;
+
+        #[allow(unused)]
+        async fn stop(&mut self) -> Result<(), ServerError>;
+
+        /* async fn handle_request(&self, request: RQI) -> Result<RSI, ServerError>;
+        async fn send_response(&self, response: RSI) -> Result<(), ServerError>; */
+    }
+
+    impl From<std::io::Error> for ServerError {
+        fn from(error: std::io::Error) -> Self {
+            ServerError::IOError(error)
+        }
+    }
+
+    
+    struct ServerInstance<RQIB, RSIB, RQI, RSI>
+    where
+        RQIB: RequestInfoBuilder<RQI>,
+        RSIB: ResponseInfoBuilder<RSI>,
+        RQI: RequestInfo,
+        RSI: ResponseInfo,
+    {
+        hosts: Vec<String>,
+        
+        #[allow(unused)]
+        protocol: Protocol,
+        request_spec: Placeholder,
+        #[allow(unused)]
+        response_spec: Placeholder,
+        req_info_builder: RQIB,
+        #[allow(unused)]
+        res_info_builder: RSIB,
+        listeners: Vec<TcpListener>,
+
+        phantom_req_info: std::marker::PhantomData<RQI>,
+        phantom_res_info: std::marker::PhantomData<RSI>,
+    }
+
+    impl<RQIB, RSIB, RQI, RSI> ServerInstance<RQIB, RSIB, RQI, RSI>
+    where
+        RQI: RequestInfo + Send + Sync,
+        RSI: ResponseInfo + Send + Sync,
+        RQIB: RequestInfoBuilder<RQI> + Send + Sync,
+        RSIB: ResponseInfoBuilder<RSI> + Send + Sync,
+    {
+
+        #[allow(unused)]
+        async fn create_listeners(&mut self) -> Result<(), ServerError> {
+            for host in &self.hosts {
+                let option = host.split_once(":");
+                match option {
+                    Some((host, port)) => {
+                        let listener = TcpListener::bind(format!("{}:{}", host, port)).await.unwrap();
+                        self.listeners.push(listener);                        
+                    }
+                    None => {
+                        return Err(ServerError::StartError("Invalid host:port format".to_owned()));
+                    }
+                }
+            }   
+            Ok(())         
+        }
+        
+        async fn accept_connections(&'static self, tcp_listener: &'static  TcpListener) {
+            let spec = &self.request_spec;
+            tokio::spawn(async move {
+                loop {
+                    let (mut socket, addr) = tcp_listener.accept().await.unwrap();
+                    println!("Accepted connection from {}", addr);
+                    let mut req_info = self.req_info_builder.build();
+                    let _handle = tokio::spawn(async move {
+                        let mut protocol_buffer =
+                            ProtocolBuffReader::new(BufReader::new(&mut socket), 1024);
+
+                        let _result: Result<(), ParserError> = protocol_buffer.parse_composite(spec, &mut req_info).await;
+                    });
+
+                    // Handle the connection
+                    // ...
+                }
+            });
+        }
+    }
+
+    impl<RQIB, RSIB, RQI, RSI> Server<RQI, RSI> for ServerInstance<RQIB, RSIB, RQI, RSI>
+    where
+        RQI: RequestInfo + Send + Sync,
+        RSI: ResponseInfo + Send + Sync,
+        RQIB: RequestInfoBuilder<RQI> + Send + Sync,
+        RSIB: ResponseInfoBuilder<RSI> + Send + Sync,
+    {
+        async fn start(&'static mut self) -> Result<(), ServerError>{
+            
+            //let host = String::new();
+            self.create_listeners().await?;
+            for listener in &self.listeners {
+                let _result = self.accept_connections(listener).await;
+                //println!("{:?}", listener);
+            }
+            
+            Ok(())
+        }
+
+        async fn stop(&mut self) -> Result<(), ServerError>{
+            todo!()
+        }
+
+        /* async fn handle_request(&self, request: RequestInfo) -> Result<ResponseInfo, ParserError> {
+            todo!()
+        }
+
+        async fn send_response(&self, response: ResponseInfo) -> Result<(), ParserError> {
+            todo!()
+        } */
+    }
+
+    /* impl<RQI, RSI> ProtocolBuilder<RQI, RSI>
+    where
+        RQI: RequestInfo,
+        RSI: ResponseInfo,
+    {
+        pub fn new(
+            name: String,
+            version: Option<String>,
+            transport: Transport,
+            format: ProtocolFormat,
+        ) -> Self {
+            ProtocolBuilder {
+                name,
+                version,
+                transport,
+                format,
+                request_info: RequestInfo::default(),
+                response_info: ResponseInfo::default(),
+            }
+        }
+    } */
 
     #[allow(unused)]
     pub trait Processor {
@@ -313,7 +550,6 @@ mod core {
         Key,
         InlineKeyWithValue(String),
         Value,
-
     }
 
     impl Default for PlaceHolderIdentifier {
@@ -328,6 +564,8 @@ mod core {
         pub name: PlaceHolderIdentifier,
         pub place_holder_type: PlaceHolderType,
         pub constituents: Option<Vec<Placeholder>>,
+        #[allow(dead_code)]
+        pub optional: bool,
     }
 
     impl Placeholder {
@@ -335,11 +573,13 @@ mod core {
             place_holder_identifier: PlaceHolderIdentifier,
             constituents: Option<Vec<Placeholder>>,
             place_holder_type: PlaceHolderType,
+            optional: bool,
         ) -> Self {
             Placeholder {
                 name: place_holder_identifier,
                 place_holder_type,
                 constituents,
+                optional
             }
         }
 
@@ -348,11 +588,13 @@ mod core {
             name: String,
             constituents: Option<Vec<Placeholder>>,
             place_holder_type: PlaceHolderType,
+            optional: bool
         ) -> Self {
             Placeholder {
                 name: PlaceHolderIdentifier::Key,
                 place_holder_type,
                 constituents,
+                optional
             }
         }
 
@@ -361,23 +603,27 @@ mod core {
             name: String,
             constituents: Option<Vec<Placeholder>>,
             place_holder_type: PlaceHolderType,
+            optional: bool
         ) -> Self {
             Placeholder {
                 name: PlaceHolderIdentifier::InlineKeyWithValue(name),
                 place_holder_type,
                 constituents,
+                optional,
             }
         }
 
         #[allow(unused)]
-        pub fn new_value_placeholder(            
+        pub fn new_value_placeholder(
             constituents: Option<Vec<Placeholder>>,
             place_holder_type: PlaceHolderType,
+            optional: bool
         ) -> Self {
             Placeholder {
                 name: PlaceHolderIdentifier::Value,
                 place_holder_type,
                 constituents,
+                optional
             }
         }
     }
@@ -468,12 +714,22 @@ mod core {
         fn expect_space(&mut self) -> &mut Self;
 
         fn expect_composite(&mut self, place_holder: Placeholder, name: String) -> &mut Self;
-        fn expect_string(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
-        fn expect_exact_string(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
-        
+        fn expect_string(&mut self, identifier: PlaceHolderIdentifier, optional: bool) -> &mut Self;
+        fn expect_exact_string(
+            &mut self,
+            identifier: PlaceHolderIdentifier,
+            input: String,
+            optional:bool,
+        ) -> &mut Self;
+
         fn expect_bytes(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
 
-        fn expect_one_of_string(&mut self, one_of: Vec<String>, identifier: PlaceHolderIdentifier) -> &mut Self;
+        fn expect_one_of_string(
+            &mut self,
+            one_of: Vec<String>,
+            identifier: PlaceHolderIdentifier,
+            optional: bool,
+        ) -> &mut Self;
 
         fn expect_repeat_many(&mut self, placeholder: Placeholder, name: String) -> &mut Self;
         fn expect_repeat_n(
@@ -483,11 +739,11 @@ mod core {
             name: String,
         ) -> &mut Self;
 
-        fn expect_stream(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
+        fn expect_stream(&mut self, identifier: PlaceHolderIdentifier, optional:bool) -> &mut Self;
 
         //fn expect_key_string(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
 
-        fn expect_value_string(&mut self) -> &mut Self;
+        fn expect_value_string(&mut self, optional:bool) -> &mut Self;
 
         fn build(&mut self) -> Placeholder;
     }
@@ -542,15 +798,17 @@ mod core {
             SpecBuilder(Placeholder {
                 name: PlaceHolderIdentifier::Name(name),
                 place_holder_type: PlaceHolderType::Composite,
-                constituents: Some(vec![]),
+                constituents: Some(vec![]), 
+                optional: false,
             })
         }
 
-        pub fn new_composite(name: String) -> Self {
+        pub fn new_composite(name: String, optional: bool) -> Self {
             SpecBuilder(Placeholder {
                 name: PlaceHolderIdentifier::Name(name),
                 place_holder_type: PlaceHolderType::Composite,
                 constituents: Some(vec![]),
+                optional,
             })
         }
     }
@@ -561,6 +819,7 @@ mod core {
                 PlaceHolderIdentifier::Name(String::new()),
                 None,
                 PlaceHolderType::NewLine,
+                false,
             ));
             return self;
         }
@@ -570,6 +829,7 @@ mod core {
                 Name(String::new()),
                 None,
                 PlaceHolderType::Delimiter(delimiter),
+                false,
             ));
             return self;
         }
@@ -579,6 +839,7 @@ mod core {
                 Name("space".to_string()),
                 None,
                 PlaceHolderType::Space,
+                false,
             ));
             return self;
         }
@@ -588,19 +849,29 @@ mod core {
                 Name(name),
                 Option::from(vec![place_holder]),
                 PlaceHolderType::Composite,
+                false,
             ));
             return self;
         }
 
-        fn expect_string(&mut self, id: PlaceHolderIdentifier) -> &mut Self {
+        fn expect_string(&mut self, id: PlaceHolderIdentifier, optional: bool) -> &mut Self {
             self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::AnyString));
+                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::AnyString, optional));
             return self;
         }
 
-        fn expect_exact_string(&mut self, input: PlaceHolderIdentifier) -> &mut Self {
-            self.0
-                .add_place_holder(Placeholder::new(input, None, PlaceHolderType::AnyString));
+        fn expect_exact_string(
+            &mut self,
+            identifier: PlaceHolderIdentifier,
+            input: String,
+            optional: bool
+        ) -> &mut Self {
+            self.0.add_place_holder(Placeholder::new(
+                identifier,
+                None,
+                PlaceHolderType::ExactString(input),
+                optional,
+            ));
             return self;
         }
 
@@ -613,31 +884,35 @@ mod core {
             return self;
         } */
 
-        fn expect_value_string(&mut self) -> &mut Self {
+        fn expect_value_string(&mut self, optional: bool) -> &mut Self {
             self.0.add_place_holder(Placeholder::new_value_placeholder(
-                
                 None,
                 PlaceHolderType::AnyString,
+                optional,
             ));
             return self;
         }
 
-        fn expect_one_of_string(&mut self, one_of: Vec<String>, id: PlaceHolderIdentifier) -> &mut Self {
-            
+        fn expect_one_of_string(
+            &mut self,
+            one_of: Vec<String>,
+            id: PlaceHolderIdentifier,
+            optional: bool,
+        ) -> &mut Self {
             self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::OneOf(one_of)));
+                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::OneOf(one_of), optional));
             return self;
         }
 
         fn expect_bytes(&mut self, id: PlaceHolderIdentifier) -> &mut Self {
             self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::Bytes));
+                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::Bytes, false));
             return self;
         }
 
-        fn expect_stream(&mut self, id: PlaceHolderIdentifier) -> &mut Self {
+        fn expect_stream(&mut self, id: PlaceHolderIdentifier, optional: bool,) -> &mut Self {
             self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::Bytes));
+                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::Stream, optional));
             return self;
         }
 
@@ -645,7 +920,7 @@ mod core {
             self.0.add_place_holder(Placeholder::new(
                 Name(name),
                 Some(vec![placeholder]),
-                PlaceHolderType::RepeatMany,
+                PlaceHolderType::RepeatMany, false,
             ));
             return self;
         }
@@ -660,6 +935,7 @@ mod core {
                 Name(name),
                 Some(vec![placeholder]),
                 PlaceHolderType::RepeatN(repeat_count),
+                false,  
             ));
             return self;
         }
@@ -726,15 +1002,15 @@ mod core {
                         return Ok(());
                     } else {
                         return Err(ParserError::InvalidToken {
-                            line_pos: 0,
-                            char_pos: 0,
+                            line_index: 0,
+                            char_index: 0,
                             message: format!("Unexpected  tokens {}", item),
                         });
                     }
                 }
                 return Err(ParserError::InvalidToken {
-                    line_pos: 0,
-                    char_pos: 0,
+                    line_index: 0,
+                    char_index: 0,
                     message: format!(
                         "Expected one of these tokens {:?}",
                         slice_to_string(self.data.as_slice())
@@ -777,8 +1053,8 @@ mod core {
                 for item in &mut iter {
                     if !self.data.contains(&item) {
                         return Err(ParserError::InvalidToken {
-                            line_pos: 0,
-                            char_pos: 0,
+                            line_index: 0,
+                            char_index: 0,
                             message: format!("Unexpected  tokens {}", item),
                         });
                     }
@@ -822,7 +1098,10 @@ mod utils;
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder, PlaceHolderIdentifier::{Name, InlineKeyWithValue}};
+    use crate::core::{
+        PlaceHolderIdentifier::{InlineKeyWithValue, Name},
+        PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder,
+    };
 
     #[test]
     fn test_protocol_spec_builder() {
@@ -830,8 +1109,9 @@ mod tests {
             Name("Request".to_string()),
             Some(vec![]),
             PlaceHolderType::Composite,
+            false,
         ));
 
-        spec_builder.expect_string(InlineKeyWithValue("request_method".to_string()));
+        spec_builder.expect_string(InlineKeyWithValue("request_method".to_string()), false);
     }
 }

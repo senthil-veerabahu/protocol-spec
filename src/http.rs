@@ -115,13 +115,15 @@ impl HttpParser {
         Ok(buf)
     }
 }
+
+
 #[allow(unused)]
 fn build_http_protocol() -> Placeholder {
-    let root_placeholder = Placeholder::new(Name("root".to_string()), None, PlaceHolderType::Composite);
+    let root_placeholder = Placeholder::new(Name("root".to_string()), None, PlaceHolderType::Composite, false);
 
     let mut spec_builder = SpecBuilder(root_placeholder);
 
-    let request_line_placeholder = SpecBuilder::new_composite("request_line".to_string())
+    let request_line_placeholder = SpecBuilder::new_composite("request_line".to_string(), false)
         .expect_one_of_string(
             vec![
                 "GET".to_string(),
@@ -131,11 +133,12 @@ fn build_http_protocol() -> Placeholder {
                 "OPTIONS".to_string(),
             ],
             InlineKeyWithValue("request_method".to_string()),
+            false,
         )
         .expect_space()
-        .expect_string(InlineKeyWithValue("request_uri".to_string()))
+        .expect_string(InlineKeyWithValue("request_uri".to_string()), false)
         .expect_space()
-        .expect_string(InlineKeyWithValue("protocol_version".to_string()))
+        .expect_string(InlineKeyWithValue("protocol_version".to_string()), false)
         .expect_newline()
         .build();
 
@@ -143,11 +146,11 @@ fn build_http_protocol() -> Placeholder {
 
     spec_builder.expect_composite(request_line_placeholder, "first_line".to_string());
 
-    let header_placeholder = SpecBuilder::new_composite("headers".to_string())
-        .expect_string(Key)
+    let header_placeholder = SpecBuilder::new_composite("headers".to_string(), false)
+        .expect_string(Key, false)
         .expect_delimiter(":".to_string())
         .expect_space()
-        .expect_value_string()
+        .expect_value_string(false)
         .expect_newline()
         .build();
 
@@ -155,10 +158,11 @@ fn build_http_protocol() -> Placeholder {
         Name("Headers".to_string()),
         Some(vec![header_placeholder]),
         PlaceHolderType::RepeatMany,
+        false,
     );
 
     spec_builder.expect_repeat_many(headers_placeholder, "headers".to_string());
-    spec_builder.expect_stream(InlineKeyWithValue("body".to_string()));
+    spec_builder.expect_stream(InlineKeyWithValue("body".to_string()), false);
     spec_builder.build()
 }
 
@@ -211,7 +215,7 @@ impl RequestParser for HttpParser {
                 );
             }
             (_, _, _) => {
-                return Err(ParserError::TokenExpected { line_pos:0, char_pos: 0, message: "Expected Http Request first line  of the form <requestmethod> <httpversion> <requesturi>".to_string() });
+                return Err(ParserError::TokenExpected { line_index:0, char_index: 0, message: "Expected Http Request first line  of the form <requestmethod> <httpversion> <requesturi>".to_string() });
             }
         }
         //}
@@ -240,7 +244,7 @@ impl RequestParser for HttpParser {
                     match (key_option, value_option) {
                         (None, None) => {}
                         (Some(key), None) => {
-                            return Err(ParserError::TokenExpected {line_pos:0,  char_pos: 0, message: format!("Expected http header {} to be of the form <requestmethod> <httpversion> <requesturi>", key) });
+                            return Err(ParserError::TokenExpected {line_index:0,  char_index: 0, message: format!("Expected http header {} to be of the form <requestmethod> <httpversion> <requesturi>", key) });
                         }
                         (Some(key), Some(value)) => {
                             http_request_info.add_info(
