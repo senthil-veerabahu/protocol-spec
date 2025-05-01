@@ -32,7 +32,7 @@ impl Default for HttpRequestInfo {
 }
 
 impl RequestInfo for HttpRequestInfo {
-    fn get_info(&self, key: String) -> Option<&ValueType> {
+    fn get_info(&self, key: &String) -> Option<&ValueType> {
         let key_ref = key.as_str();
         match key_ref {
             "RequestMethod" => {
@@ -78,6 +78,14 @@ impl RequestInfo for HttpRequestInfo {
                 self.headers.insert(key.to_string(), value);
             }
         }
+    }
+    
+    fn get_keys_by_group_name(&self, name: String) -> Option<Vec<String>> {
+        todo!()
+    }
+    
+    fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType> {
+        todo!()
     }
 }
 
@@ -162,7 +170,7 @@ fn build_http_protocol() -> Placeholder {
     );
 
     spec_builder.expect_repeat_many(headers_placeholder, "headers".to_string());
-    spec_builder.expect_stream(InlineKeyWithValue("body".to_string()), false);
+    spec_builder.expect_stream(InlineKeyWithValue("body".to_string()),"body".to_string(), false);
     spec_builder.build()
 }
 
@@ -289,21 +297,21 @@ mod tests {
             match h {
                 Ok(info) => {
                     assert_eq!(
-                        info.get_info("RequestUri".to_string())
+                        info.get_info(&"RequestUri".to_string())
                             .unwrap()
                             .get_string_value()
                             .unwrap(),
                         "/"
                     );
                     assert_eq!(
-                        info.get_info("ProtocolVersion".to_string())
+                        info.get_info(&"ProtocolVersion".to_string())
                             .unwrap()
                             .get_string_value()
                             .unwrap(),
                         "http/1.1"
                     );
                     assert_eq!(
-                        info.get_info("RequestMethod".to_string())
+                        info.get_info(&"RequestMethod".to_string())
                             .unwrap()
                             .get_string_value()
                             .unwrap(),
@@ -311,14 +319,14 @@ mod tests {
                     );
 
                     assert_eq!(
-                        info.get_info("Content-Length".to_string())
+                        info.get_info(&"Content-Length".to_string())
                             .unwrap()
                             .get_string_value()
                             .unwrap(),
                         "0"
                     );
                     assert_eq!(
-                        info.get_info("Content-Type".to_string())
+                        info.get_info(&"Content-Type".to_string())
                             .unwrap()
                             .get_string_value()
                             .unwrap(),
@@ -327,7 +335,7 @@ mod tests {
                     assert_eq!(
                         String::from_utf8(
                             (info
-                                .get_info("RequestBody".to_string())
+                                .get_info(&"RequestBody".to_string())
                                 .unwrap()
                                 .get_u8_vec()
                                 .unwrap())

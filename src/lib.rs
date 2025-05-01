@@ -1,14 +1,18 @@
+//#![debugger_visualizer(natvis_file = "./Foo.natvis")]
+
 mod core {
     use crate::core::PlaceHolderIdentifier::Name;
     use crate::core::PlaceHolderType::OneOf;
     use protocol_reader::ProtocolBuffReader;
+
+    use tokio_stream::StreamExt;
+
     
     use std::{
-        fmt::{Display, Formatter},
-        mem::{self},
+        fmt::{Display, Formatter}, mem::{self}
     };
     use tokio::{
-        io::{AsyncRead, BufReader},
+        io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
         net::TcpListener,
     };
 
@@ -20,6 +24,7 @@ mod core {
         fn get_format() -> ProtocolFormat;
     }
 
+    #[allow(unused)]
     #[derive(Debug)]
     pub enum ParserError {
         InvalidPlaceHolderTypeFound {
@@ -38,6 +43,8 @@ mod core {
             message: String,
         },
         MissingKey,
+        MissingData,
+        MissingValue(String),
         IOError {
             error: std::io::Error,
         },
@@ -47,45 +54,55 @@ mod core {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
                 ParserError::TokenExpected {
-                    line_index: line_pos,
-                    char_index: position,
-                    message,
-                } => {
-                    write!(
-                        f,
-                        "Token expected at line {} char_pos {} {}",
-                        line_pos, position, message
-                    )
-                }
+                                line_index: line_pos,
+                                char_index: position,
+                                message,
+                            } => {
+                                write!(
+                                    f,
+                                    "Token expected at line {} char_pos {} {}",
+                                    line_pos, position, message
+                                )
+                            }
                 ParserError::InvalidToken {
-                    line_index: line_pos,
-                    char_index: char_pos,
-                    message,
-                } => {
-                    write!(
-                        f,
-                        "Invalid token at line {}  position {} {}",
-                        line_pos, char_pos, message
-                    )
-                }
+                                line_index: line_pos,
+                                char_index: char_pos,
+                                message,
+                            } => {
+                                write!(
+                                    f,
+                                    "Invalid token at line {}  position {} {}",
+                                    line_pos, char_pos, message
+                                )
+                            }
                 ParserError::IOError { error } => {
-                    write!(f, "IO Error {}", error)
-                }
+                                write!(f, "IO Error {}", error)
+                            }
                 ParserError::MissingKey => write!(
-                    f,
-                    "Key value pair is expected. But key is missing, only value is present "
-                ),
+                                f,
+                                "Key value pair is expected. But key is missing, only value is present "
+                            ),
                 ParserError::InvalidPlaceHolderTypeFound {
-                    line_index: line_pos,
-                    char_index: char_pos,
-                    message,
-                } => {
-                    write!(
-                        f,
-                        "Invalid placeholder type found at line {}  position {} {}",
-                        line_pos, char_pos, message
-                    )
-                }
+                                line_index: line_pos,
+                                char_index: char_pos,
+                                message,
+                            } => {
+                                write!(
+                                    f,
+                                    "Invalid placeholder type found at line {}  position {} {}",
+                                    line_pos, char_pos, message
+                                )
+                            }
+                ParserError::MissingData =>  write!(
+                    f,
+                    "Expected data but found none whle writing to writer",
+                    
+                ),
+                ParserError::MissingValue(key) => write!(
+                    f,
+                    "Expected value for key {} but found none whle writing to writer",
+                    key                    
+                )
             }
         }
     }
@@ -170,82 +187,54 @@ mod core {
         UnSignedNumber64(u64),
         //UnSignedByteSlice([u8]),
         U8Vec(Vec<u8>),
-        StreamData(protocol_reader::ProtoStream<BufReader<tokio::net::TcpStream>>),
+        StreamData(&'static mut protocol_reader::ProtoStream<BufReader<tokio::net::TcpStream>>),
+        //StreamData1(StreamValueType<ProtoStream<BufReader<TcpStream>>>),
         None,
+        //KeyValueCollection(Vec<(String, ValueType)>),
     }
 
-    #[allow(unused)]
-    impl ValueType {
-        fn is_none(&self) -> bool {
-            match self {
-                ValueType::None => {
-                    return false;
-                }
-                _ => {
-                    return true;
-                }
-            }
-        }
 
-        fn has_value(&self) -> bool {
+    impl ValueType{
+        #[allow(unused)]
+        async fn write<W:AsyncWrite + Unpin>(&mut self, mut writer: W) -> Result<(), ParserError> {
             match self {
-                ValueType::None => {
-                    return false;
+                ValueType::String(s) => {
+                    writer.write(s.as_bytes()).await?;
                 }
-                _ => {
-                    return true;
+                ValueType::SignedNumber64(num) => {
+                    writer.write_i64(*num).await?;
                 }
+                ValueType::UnSignedNumber64(num) => {
+                    writer.write_u64(*num).await?;
+                }
+                ValueType::U8Vec(data) => {
+                    writer.write_all(&data[..]).await?;
+                }
+                ValueType::StreamData(stream) => {
+                    loop{
+                    if let  Some(data) = StreamExt::next(*stream).await {
+                        match data {
+                            Ok(datum) => {
+                                writer.write_u8(datum).await?;
+                            }
+                            Err(e) => {
+                                return Err(ParserError::IOError { error: e });
+                            }
+                        }
+                    }else{
+                        break;
+                    }
+                }
+                }
+                _ => {}
             }
+            Ok(())
         }
-
-        /*fn get_value<T>(&self) -> impl ValueTypeExtractor<T> {
-            match self {
-                ValueType::String(s) => { return Value(s); }
-                ValueType::SignedNumber64(data) => { return Value(data); }
-                ValueType::UnSignedNumber64(data) => { return Value(data); }
-                ValueType::UnSignedByteSlice(data) => { return Value(data) }
-                ValueType::None => { Value(()) }
-            }
-        }*/
     }
 
-    /* #[allow(unused)]
-    trait ValueTypeExtractor<T> {
-        fn get_value(&self) -> Value<T>;
-    } */
-
-    /*     #[allow(unused)]
-    struct Value<T>(T); */
-
-    /*impl <T> ValueExtractor<T> for Value<T>{
-        fn get_value(&self) -> T {
-            &self.0
-        }
-    }*/
-
-    /*impl <'a, > ValueType<'a> where Value<&'a &'a str>: ValueExtractor<T>{
-        fn get_value_extractor(&self) -> impl ValueExtractor<T> {
-            match self {
-                ValueType::String(s) => { return Value(s); }
-                ValueType::SignedNumber64(data) => { return Value(data); }
-                ValueType::UnSignedNumber64(data) => { return Value(data); }
-                ValueType::UnSignedByteSlice(data) => { return Value(data); }
-                ValueType::None => { return Value(()); }
-            }
-        }
-    }*/
-
-    /*impl <'a, T> ValueExtractor<T> for ValueType<'a>{
-        fn get_value(&self) -> Value<T> {
-            match self {
-                ValueType::String(s) => { return Value(s); }
-                ValueType::SignedNumber64(data) => { return Value(data); }
-                ValueType::UnSignedNumber64(data) => { return Value(data); }
-                ValueType::UnSignedByteSlice(data) => { return Value(data); }
-                ValueType::None => { return Value(()); }
-            }
-        }
-    }*/
+    
+    
+    
 
     #[allow(unused)]
     pub trait RequestProcessorRegistrar {
@@ -287,9 +276,17 @@ mod core {
 
     pub trait RequestInfo: Default {
         #[allow(unused)]
-        fn get_info(&self, key: String) -> Option<&ValueType>;
+        fn get_info(&self, key: &String) -> Option<&ValueType>;
+
+        #[allow(unused)]
+        fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType>;
+
+        #[allow(unused)]
+        fn get_keys_by_group_name(&self, name: String) -> Option<Vec<String>>;
 
         fn add_info(&mut self, key: String, value: ValueType);
+
+
     }
 
     pub trait ResponseInfo: Default {
@@ -536,7 +533,7 @@ mod core {
         Composite,
         RepeatMany,
         RepeatN(u8),
-        Stream,
+        StreamValue(String),
     }
 
     /* #[allow(unused)]
@@ -663,7 +660,7 @@ mod core {
                 PlaceHolderType::RepeatMany => todo!(),
                 PlaceHolderType::RepeatN(_) => todo!(),
                 OneOf(items) => todo!(),
-                PlaceHolderType::Stream => todo!(),
+                PlaceHolderType::StreamValue(data) => todo!(),
             }
         }
     }
@@ -739,7 +736,7 @@ mod core {
             name: String,
         ) -> &mut Self;
 
-        fn expect_stream(&mut self, identifier: PlaceHolderIdentifier, optional:bool) -> &mut Self;
+        fn expect_stream(&mut self, identifier: PlaceHolderIdentifier, name: String, optional:bool) -> &mut Self;
 
         //fn expect_key_string(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
 
@@ -770,7 +767,7 @@ mod core {
             PlaceHolderType::Composite => {}
             PlaceHolderType::RepeatMany => {}
             PlaceHolderType::RepeatN(_) => {}
-            PlaceHolderType::Stream => todo!(),
+            PlaceHolderType::StreamValue(name) => todo!(),
         }
     }
 
@@ -910,9 +907,9 @@ mod core {
             return self;
         }
 
-        fn expect_stream(&mut self, id: PlaceHolderIdentifier, optional: bool,) -> &mut Self {
+        fn expect_stream(&mut self, id: PlaceHolderIdentifier, name: String, optional: bool) -> &mut Self {
             self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::Stream, optional));
+                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::StreamValue(name), optional));
             return self;
         }
 
@@ -1085,12 +1082,13 @@ mod core {
                 PlaceHolderType::Composite => {}
                 PlaceHolderType::RepeatMany => {}
                 PlaceHolderType::RepeatN(_) => {}
-                PlaceHolderType::Stream => todo!(),
+                PlaceHolderType::StreamValue(name) => todo!(),
             }
         }
     }
 
     mod protocol_reader;
+    mod protocol_writer;
 }
 
 mod http;
@@ -1113,5 +1111,69 @@ mod tests {
         ));
 
         spec_builder.expect_string(InlineKeyWithValue("request_method".to_string()), false);
+    }
+}
+
+#[cfg(test)]
+mod test_utils{
+    use std::collections::HashMap;
+
+    use crate::core::{RequestInfo, ValueType};
+
+
+    pub fn assert_result_has_string(
+        result: Result<Option<crate::core::ValueType>, crate::core::ParserError>,
+        data: String,
+    ) {
+        match result {
+
+            Ok(Some(crate::core::ValueType::String(value))) => {
+                assert!(value == data);
+            }
+            _ => {
+                assert!(false);
+            }
+        }
+    }
+
+    #[derive(Default)]
+    pub struct TestRequestInfo(HashMap<String, ValueType>);
+
+    impl TestRequestInfo {
+        pub fn new() -> Self {
+            TestRequestInfo(HashMap::new())
+        }
+    }
+
+    impl RequestInfo for TestRequestInfo {
+        fn add_info(&mut self, key: String, value: ValueType) {
+            self.0.insert(key, value);
+        }
+
+        fn get_info(&self, key: &String) -> Option<&crate::core::ValueType> {
+            self.0.get(key)
+        }
+        
+        fn get_keys_by_group_name(&self, _name:String) -> Option<Vec<String>> {
+            let mut keys = Vec::new();
+            for (key, _value) in &self.0 {
+                
+                    keys.push(key.clone());
+                
+            }
+            if keys.is_empty() {
+                None
+            } else {
+                Some(keys)
+            }
+        }
+        
+        fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType> {
+            if let Some(value) = self.0.get_mut(key) {
+                Some(value)
+            } else {
+                None
+            }
+        }
     }
 }

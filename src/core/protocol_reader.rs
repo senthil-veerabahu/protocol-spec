@@ -57,6 +57,7 @@ where
     type Item = io::Result<u8>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        
         if self.buff_reader.pos < self.buff_reader.buf.len() {
             let value = self.buff_reader.buf[self.buff_reader.pos];
             self.buff_reader.consume(1);
@@ -694,6 +695,13 @@ where
                         }
                         PlaceHolderType::RepeatMany => {
                             let mut count = 0;
+                            let header_name = match &constituent.name {
+                                crate::core::PlaceHolderIdentifier::Name(name) => {
+                                    Some(name.to_owned())    
+                                }
+                                
+                                _ => None,
+                            };
                             loop {
                                 self.mark();
                                 let result =
@@ -779,7 +787,7 @@ where
                              
                             i += 1;
                         }
-                        PlaceHolderType::Stream => {
+                        PlaceHolderType::StreamValue(name) => {
                             // let x = Box::pin(self.as_stream());
                             todo!()
                         }
@@ -959,7 +967,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use tokio::io::BufReader;
     use tokio_stream::StreamExt;
@@ -967,25 +974,12 @@ mod tests {
     use crate::core::protocol_reader::ProtoStream;
     use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        PlaceHolderType, Placeholder, ProtocolSpecBuilder, RequestInfo, SpecBuilder, ValueType,
+        PlaceHolderType, Placeholder, ProtocolSpecBuilder, RequestInfo, SpecBuilder,
     };
+    use crate::test_utils::{assert_result_has_string, TestRequestInfo};
 
     use super::{PlaceHolderRead, ProtocolBuffReader};
-
-    fn assert_result_has_string(
-        result: Result<Option<crate::core::ValueType>, crate::core::ParserError>,
-        data: String,
-    ) {
-        match result {
-
-            Ok(Some(crate::core::ValueType::String(value))) => {
-                assert!(value == data);
-            }
-            _ => {
-                assert!(false);
-            }
-        }
-    }
+    
 
     #[tokio::test]
     async fn test_read_string_until() {
@@ -1325,7 +1319,7 @@ mod tests {
             .await;
         println!("Result: {:?}", result);
         assert!(result.is_ok());
-        let request_method = request_info.get_info("request_method".to_string()).unwrap();
+        let request_method = request_info.get_info(&"request_method".to_string()).unwrap();
         match request_method {
             crate::core::ValueType::String(value) => {
                 assert!(*value == "GET".to_string());
@@ -1335,7 +1329,7 @@ mod tests {
             }
         }
 
-        match request_info.get_info("name".to_owned()).unwrap() {
+        match request_info.get_info(&"name".to_owned()).unwrap() {
             crate::core::ValueType::String(value) => {
                 assert!(*value == "value".to_string());
             }
@@ -1344,7 +1338,7 @@ mod tests {
             }
         }
 
-        match request_info.get_info("name2".to_owned()).unwrap() {
+        match request_info.get_info(&"name2".to_owned()).unwrap() {
             crate::core::ValueType::String(value) => {
                 assert!(*value == "value2".to_string());
             }
@@ -1353,7 +1347,7 @@ mod tests {
             }
         }
 
-        match request_info.get_info("data".to_owned()).unwrap() {
+        match request_info.get_info(&"data".to_owned()).unwrap() {
             crate::core::ValueType::String(value) => {
                 assert!(*value == "test123".to_string());
             }
@@ -1456,7 +1450,7 @@ mod tests {
         let result = protocol_reader.parse_composite(&spec, &mut request_info).await;
         match result {
             Ok(_) => {
-                let first_word = request_info.get_info("first_word".to_string()).unwrap();
+                let first_word = request_info.get_info(&"first_word".to_string()).unwrap();
                 match first_word {
                     crate::core::ValueType::String(value) => {
                         assert!(*value == "Hello".to_string());
@@ -1465,7 +1459,7 @@ mod tests {
                         assert!(false);
                     }
                 }
-                let second_word = request_info.get_info("second_word".to_string());
+                let second_word = request_info.get_info(&"second_word".to_string());
                 
                 assert!(second_word.is_none());
             }
@@ -1479,22 +1473,5 @@ mod tests {
     }
 
 
-    #[derive(Default)]
-    struct TestRequestInfo(HashMap<String, ValueType>);
-
-    impl TestRequestInfo {
-        fn new() -> Self {
-            TestRequestInfo(HashMap::new())
-        }
-    }
-
-    impl RequestInfo for TestRequestInfo {
-        fn add_info(&mut self, key: String, value: ValueType) {
-            self.0.insert(key, value);
-        }
-
-        fn get_info(&self, key: String) -> Option<&crate::core::ValueType> {
-            self.0.get(&key)
-        }
-    }
+    
 }
