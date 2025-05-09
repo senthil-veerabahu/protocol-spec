@@ -3,17 +3,18 @@
 mod core {
     use crate::core::PlaceHolderIdentifier::Name;
     use crate::core::PlaceHolderType::OneOf;
+    use async_trait::async_trait;
     use protocol_reader::ProtocolBuffReader;
 
-    use tokio_stream::StreamExt;
+    use protocol_writer::ProtocolBuffWriter;
 
-    
     use std::{
-        fmt::{Display, Formatter}, mem::{self}
+        fmt::{Debug, Display, Formatter},
+        mem::{self},
     };
     use tokio::{
         io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
     };
 
     #[allow(dead_code)]
@@ -54,55 +55,53 @@ mod core {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
                 ParserError::TokenExpected {
-                                line_index: line_pos,
-                                char_index: position,
-                                message,
-                            } => {
-                                write!(
-                                    f,
-                                    "Token expected at line {} char_pos {} {}",
-                                    line_pos, position, message
-                                )
-                            }
+                    line_index: line_pos,
+                    char_index: position,
+                    message,
+                } => {
+                    write!(
+                        f,
+                        "Token expected at line {} char_pos {} {}",
+                        line_pos, position, message
+                    )
+                }
                 ParserError::InvalidToken {
-                                line_index: line_pos,
-                                char_index: char_pos,
-                                message,
-                            } => {
-                                write!(
-                                    f,
-                                    "Invalid token at line {}  position {} {}",
-                                    line_pos, char_pos, message
-                                )
-                            }
+                    line_index: line_pos,
+                    char_index: char_pos,
+                    message,
+                } => {
+                    write!(
+                        f,
+                        "Invalid token at line {}  position {} {}",
+                        line_pos, char_pos, message
+                    )
+                }
                 ParserError::IOError { error } => {
-                                write!(f, "IO Error {}", error)
-                            }
+                    write!(f, "IO Error {}", error)
+                }
                 ParserError::MissingKey => write!(
-                                f,
-                                "Key value pair is expected. But key is missing, only value is present "
-                            ),
-                ParserError::InvalidPlaceHolderTypeFound {
-                                line_index: line_pos,
-                                char_index: char_pos,
-                                message,
-                            } => {
-                                write!(
-                                    f,
-                                    "Invalid placeholder type found at line {}  position {} {}",
-                                    line_pos, char_pos, message
-                                )
-                            }
-                ParserError::MissingData =>  write!(
                     f,
-                    "Expected data but found none whle writing to writer",
-                    
+                    "Key value pair is expected. But key is missing, only value is present "
                 ),
+                ParserError::InvalidPlaceHolderTypeFound {
+                    line_index: line_pos,
+                    char_index: char_pos,
+                    message,
+                } => {
+                    write!(
+                        f,
+                        "Invalid placeholder type found at line {}  position {} {}",
+                        line_pos, char_pos, message
+                    )
+                }
+                ParserError::MissingData => {
+                    write!(f, "Expected data but found none whle writing to writer",)
+                }
                 ParserError::MissingValue(key) => write!(
                     f,
                     "Expected value for key {} but found none whle writing to writer",
-                    key                    
-                )
+                    key
+                ),
             }
         }
     }
@@ -193,10 +192,9 @@ mod core {
         //KeyValueCollection(Vec<(String, ValueType)>),
     }
 
-
-    impl ValueType{
+    impl ValueType {
         #[allow(unused)]
-        async fn write<W:AsyncWrite + Unpin>(&mut self, mut writer: W) -> Result<(), ParserError> {
+        async fn write<W: AsyncWrite + Unpin>(& self, mut writer: W) -> Result<(), ParserError> {
             match self {
                 ValueType::String(s) => {
                     writer.write(s.as_bytes()).await?;
@@ -210,9 +208,8 @@ mod core {
                 ValueType::U8Vec(data) => {
                     writer.write_all(&data[..]).await?;
                 }
-                ValueType::StreamData(stream) => {
-                    loop{
-                    if let  Some(data) = StreamExt::next(*stream).await {
+                /* ValueType::StreamData(stream) => loop {
+                    if let Some(data) = StreamExt::next(*stream).await {
                         match data {
                             Ok(datum) => {
                                 writer.write_u8(datum).await?;
@@ -221,22 +218,17 @@ mod core {
                                 return Err(ParserError::IOError { error: e });
                             }
                         }
-                    }else{
+                    } else {
                         break;
                     }
-                }
-                }
+                }, */
                 _ => {}
             }
             Ok(())
         }
     }
 
-    
-    
-    
-
-    #[allow(unused)]
+    /*     #[allow(unused)]
     pub trait RequestProcessorRegistrar {
         fn register_request_processor<'a, H, RI>(
             request_type: String,
@@ -245,19 +237,37 @@ mod core {
         ) where
             H: RequestHandler,
             RI: RequestInfo;
-    }
+    } */
 
-    pub trait RequestParser {
+    
+
+    pub trait RequestParse {
         #[allow(unused)]
         async fn parse_request<RI, RequestStream>(
             &self,
             reader: RequestStream,
+            request_spec: &Placeholder,
         ) -> Result<RI, ParserError>
         where
             /*H: RequestHandler,*/
             RI: RequestInfo,
             RequestStream: AsyncRead + Unpin;
     }
+
+    /* impl RequestParse for Parser {
+        async fn parse_request<RI, RequestStream, >(
+            &self,
+            reader: RequestStream,
+        ) -> Result<RI, ParserError>
+        where
+            RI: RequestInfo,
+            RequestStream: AsyncRead + Unpin,
+        {
+
+
+            todo!()
+        }
+    } */
 
     /*
     use tokio::stream::StreamExt;
@@ -274,7 +284,7 @@ mod core {
 
     }*/
 
-    pub trait RequestInfo: Default {
+    pub trait InfoProvider: Default + Send + Sync {
         #[allow(unused)]
         fn get_info(&self, key: &String) -> Option<&ValueType>;
 
@@ -282,38 +292,217 @@ mod core {
         fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType>;
 
         #[allow(unused)]
-        fn get_keys_by_group_name(&self, name: String) -> Option<Vec<String>>;
+        fn get_keys_by_group_name(&self, name: String) -> Option<Vec<& String>>;
 
         fn add_info(&mut self, key: String, value: ValueType);
 
-
     }
 
-    pub trait ResponseInfo: Default {
-        #[allow(unused)]
-        fn get_info(&self, key: String) -> Option<&ValueType>;
+    pub trait RequestInfo: InfoProvider {
+       /*  #[allow(unused)]
+        fn get_info(&self, key: &String) -> Option<&ValueType>;
 
         #[allow(unused)]
-        fn add_info(&mut self, key: String, value: ValueType);
+        fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType>;
+
+        #[allow(unused)]
+        fn get_keys_by_group_name(&self, name: String) -> Option<Vec<&String>>;
+
+        fn add_info(&mut self, key: String, value: ValueType); */
+    }
+
+    pub trait ResponseInfo: InfoProvider {
+        
     }
 
     #[allow(unused)]
-    pub trait RequestInfoBuilder<RQI>
+    pub trait RequestFactory<REQI, REQSER, AR, AW, REQH, REQERRH, RESI> : Send + Sync
     where
-        RQI: RequestInfo,
+        REQI: RequestInfo,
+        AR: AsyncRead + Unpin + Send + Sync,
+        AW: AsyncWrite + Unpin + Send + Sync,
+        REQSER: RequestSerializer<REQI, AR, AW>,
+        REQH: RequestHandler<REQI, RESI>,
+        REQERRH: RequestErrorHandler<REQI, RESI>,
+        RESI: ResponseInfo,
     {
-        fn build(&self) -> RQI;
+        fn get_request_spec(&self) -> &Placeholder;
+        fn create_request_info(&self) -> REQI;
+        fn create_request_serializer(&self) -> REQSER;
+        fn create_request_handler(&self) -> &REQH;
+        fn create_error_request_handler(&self) -> REQERRH;
     }
 
     #[allow(unused)]
-    pub trait ResponseInfoBuilder<RSI>
+    pub trait ResponseFactory<RESI, RESS, AR, AW, RESH, RESERRH>: Send + Sync
     where
-        RSI: ResponseInfo,
+        RESI: ResponseInfo,
+        AR: AsyncRead + Unpin + Send + Sync,
+        AW: AsyncWrite + Unpin + Send + Sync,
+        RESS: ResponseSerializer<RESI, AR, AW>,
+        RESH: ResponseHandler<RESI>,
+        RESERRH: ResponseErrorHandler<RESI>,
     {
-        fn build(&self) -> RSI;
+        fn get_response_spec(&self) -> &Placeholder;
+        fn create_response_info(&self) -> RESI;
+        fn create_response_serializer(&self) -> RESS;
+        fn create_response_handler(&self) -> &RESH;
+        fn create_error_responset_handler(&self) -> RESERRH;
     }
 
-    pub trait RequestHandler {}
+    #[async_trait]
+    pub trait RequestHandler<REQI, RESI> : Send + Sync
+    where
+        REQI: RequestInfo,
+        RESI: ResponseInfo,
+    {
+        async fn handle_request(&self, request: &REQI) -> Result<RESI, ParserError>;
+    }
+
+    pub trait ResponseHandler<RESI> : Send + Sync
+    where
+        RESI: ResponseInfo,
+    {
+        #[allow(unused)]
+        fn handle_response(&self, response: &RESI) -> Result<(), ParserError>;
+    }
+
+    pub trait ResponseErrorHandler<RESI>  : Send + Sync
+    where
+        RESI: ResponseInfo,
+    {
+        #[allow(unused)]
+        fn handle_response_error<E>(
+            &self,
+            response_info: &RESI,
+            error: E,
+        ) -> Result<(), ParserError>;
+    }
+
+    pub trait RequestErrorHandler<REQI, RESI>: Send + Sync
+    where
+        REQI: RequestInfo,
+        RESI: ResponseInfo,
+    {
+        #[allow(unused)]
+        fn handle_request_error<E>(&self, request: &REQI, error: E) -> Result<RESI, ParserError>;
+    }
+
+    #[async_trait]
+    pub trait RequestSerializer<
+        REQI: RequestInfo,
+        AR: AsyncRead + Unpin + Send + Sync,
+        AW: AsyncWrite + Unpin + Send + Sync>: Send + Sync
+    {
+        #[allow(unused)]
+        async fn serialize_to(
+            &self,
+            req: REQI,
+            writer: AW,
+            spec: &Placeholder,
+        ) -> Result<(), ParserError>;
+
+        async fn deserialize_from(
+            &self,
+            request_info: REQI,
+            reader: &mut BufReader<&mut AR>,
+            spec: &Placeholder,
+        ) -> Result<REQI, ParserError>;        
+    }
+
+
+    #[async_trait]
+    pub trait ResponseSerializer<RSI, R, W>: Send + Sync 
+    where RSI: ResponseInfo ,
+        R: AsyncRead + Unpin + Send + Sync,
+        W: AsyncWrite + Unpin + Send + Sync,
+    {
+        async fn serialize_to(
+            &self,
+            req: RSI,
+            writer: W,
+            spec: &Placeholder,
+        ) -> Result<(), ParserError>;
+
+        #[allow(unused)]
+        async fn deserialize_from(&self,  response_info: &mut RSI,reader: &mut BufReader<&mut R>, spec: &Placeholder) -> Result<(), ParserError>;
+    }
+
+    #[allow(unused)]
+    struct DefaultSerializer;
+
+    #[async_trait]
+    impl<REQI, AR, AW>
+        RequestSerializer<REQI, AR, AW> for DefaultSerializer
+        where 
+            REQI: RequestInfo + 'static,
+            AR: AsyncRead + Unpin + Send + Sync + 'static,
+            AW: AsyncWrite + Unpin + Send + Sync + 'static,
+    {
+        async fn serialize_to(
+            &self,
+            request_info: REQI,
+            writer: AW,
+            spec: &Placeholder,
+        ) -> Result<(), ParserError> {
+            let mut protocol_writer = ProtocolBuffWriter::new(writer);
+            protocol_writer
+                .write_composite(spec, &request_info, None)
+                .await?;
+            Ok(())
+        }
+
+        async fn deserialize_from(
+            &self,
+            mut request_info:  REQI,
+            reader: &mut BufReader<&mut AR>,
+            spec: &Placeholder,
+        ) -> Result<REQI, ParserError> {
+            let mut protocol_reader = ProtocolBuffReader::new(reader, 1024);
+            protocol_reader
+                .parse_composite(&mut request_info, spec).await?;
+                
+            Ok(request_info)
+        }        
+    }
+
+    #[async_trait]
+    impl<RESI, AR, AW>
+        ResponseSerializer<RESI, AR, AW> for DefaultSerializer
+        where 
+            RESI: ResponseInfo + 'static,
+            AR: AsyncRead + Unpin + Send + Sync + 'static,
+            AW: AsyncWrite + Unpin + Send + Sync + 'static,
+    {
+        async fn serialize_to(
+            &self,
+            response_info: RESI,
+            writer: AW,
+            spec: &Placeholder,
+        ) -> Result<(), ParserError> {
+            let mut protocol_writer = ProtocolBuffWriter::new(writer);
+            protocol_writer
+                .write_composite(spec, &response_info, None)
+                .await?;
+            Ok(())
+        }
+
+        //(&self, mut response_info: RSI,reader: R, spec: &Placeholder)
+        //async fn deserialize_from(&self,  response_info: &mut RSI,reader: &mut BufReader<&mut R>, spec: &Placeholder) -> Result<RSI, ParserError>;
+
+        async fn deserialize_from(
+            &self,
+            response_info:&mut RESI,
+            reader: &mut BufReader<&mut AR>,
+            spec: &Placeholder,
+        ) -> Result<(), ParserError> {
+            let mut protocol_reader = ProtocolBuffReader::new(reader, 1024);
+            protocol_reader
+                .parse_composite(response_info, spec).await?;
+                
+            Ok(())
+        }        
+    }
 
     #[allow(unused)]
     pub struct Protocol {
@@ -359,11 +548,7 @@ mod core {
         IOError(std::io::Error),
     }
 
-    pub trait Server<RQI, RSI>
-    where
-        RQI: RequestInfo,
-        RSI: ResponseInfo,
-    {
+    pub trait Server {
         #[allow(unused)]
         async fn start(&'static mut self) -> Result<(), ServerError>;
 
@@ -380,67 +565,77 @@ mod core {
         }
     }
 
-    
-    struct ServerInstance<RQIB, RSIB, RQI, RSI>
+    pub trait ProtocolConfig<R, W>: Send + Sync
     where
-        RQIB: RequestInfoBuilder<RQI>,
-        RSIB: ResponseInfoBuilder<RSI>,
-        RQI: RequestInfo,
-        RSI: ResponseInfo,
+        R: AsyncRead + Unpin + Send + Sync,
+        W: AsyncWrite + Unpin + Send + Sync,
     {
-        hosts: Vec<String>,
-        
-        #[allow(unused)]
-        protocol: Protocol,
-        request_spec: Placeholder,
-        #[allow(unused)]
-        response_spec: Placeholder,
-        req_info_builder: RQIB,
-        #[allow(unused)]
-        res_info_builder: RSIB,
-        listeners: Vec<TcpListener>,
+        type REQF: RequestFactory<Self::REQI, Self::REQSER, R, W, Self::REQH, Self::REQERRH, Self::RESI>;
+        type RESF: ResponseFactory<Self::RESI, Self::RESSER, R, W, Self::RESH, Self::RESERRH>;
+        type REQI: RequestInfo;
+        type RESI: ResponseInfo;
+        type REQSER: RequestSerializer<Self::REQI, R, W>;
+        type RESSER: ResponseSerializer<Self::RESI, R, W>;
 
-        phantom_req_info: std::marker::PhantomData<RQI>,
-        phantom_res_info: std::marker::PhantomData<RSI>,
+        type REQH: RequestHandler<Self::REQI, Self::RESI>;
+        type RESH: ResponseHandler<Self::RESI>;
+        type REQERRH: RequestErrorHandler<Self::REQI, Self::RESI>;
+        type RESERRH: ResponseErrorHandler<Self::RESI>;
     }
 
-    impl<RQIB, RSIB, RQI, RSI> ServerInstance<RQIB, RSIB, RQI, RSI>
-    where
-        RQI: RequestInfo + Send + Sync,
-        RSI: ResponseInfo + Send + Sync,
-        RQIB: RequestInfoBuilder<RQI> + Send + Sync,
-        RSIB: ResponseInfoBuilder<RSI> + Send + Sync,
-    {
+    struct ServerInstance<CFG: ProtocolConfig<TcpStream, TcpStream>> {
+        hosts: Vec<String>,
 
+        #[allow(unused)]
+        protocol: Protocol,
+        request_factory: CFG::REQF,
+        #[allow(unused)]
+        response_factory: CFG::RESF,
+        listeners: Vec<TcpListener>,
+
+        phantom_req_info: std::marker::PhantomData<CFG::REQF>,
+        phantom_res_info: std::marker::PhantomData<CFG::RESF>,
+    }
+
+    #[allow(unused)]
+    fn is_send<T: Send>(s: T) {}
+
+    impl<CFG: ProtocolConfig<TcpStream, TcpStream>> ServerInstance<CFG> {
         #[allow(unused)]
         async fn create_listeners(&mut self) -> Result<(), ServerError> {
             for host in &self.hosts {
                 let option = host.split_once(":");
                 match option {
                     Some((host, port)) => {
-                        let listener = TcpListener::bind(format!("{}:{}", host, port)).await.unwrap();
-                        self.listeners.push(listener);                        
+                        let listener = TcpListener::bind(format!("{}:{}", host, port))
+                            .await
+                            .unwrap();
+                        self.listeners.push(listener);
                     }
                     None => {
-                        return Err(ServerError::StartError("Invalid host:port format".to_owned()));
+                        return Err(ServerError::StartError(
+                            "Invalid host:port format".to_owned(),
+                        ));
                     }
                 }
-            }   
-            Ok(())         
+            }
+            Ok(())
         }
-        
-        async fn accept_connections(&'static self, tcp_listener: &'static  TcpListener) {
-            let spec = &self.request_spec;
+
+        async fn accept_connections(&'static self, tcp_listener: &'static TcpListener) {
+            //let spec = self.request_factory.get_request_spec();
             tokio::spawn(async move {
                 loop {
-                    let (mut socket, addr) = tcp_listener.accept().await.unwrap();
+                    let (socket, addr) = tcp_listener.accept().await.unwrap();
                     println!("Accepted connection from {}", addr);
-                    let mut req_info = self.req_info_builder.build();
-                    let _handle = tokio::spawn(async move {
-                        let mut protocol_buffer =
-                            ProtocolBuffReader::new(BufReader::new(&mut socket), 1024);
 
-                        let _result: Result<(), ParserError> = protocol_buffer.parse_composite(spec, &mut req_info).await;
+                    let _handle = tokio::spawn(async move {
+                        self.handle_connection(socket).await;
+                        //let mut req_info = self.request_factory.create_request_info();
+                        //let serializer = self.request_factory.create_request_serializer();
+                        //is_send(serializer);
+                        //let f = serializer.deserialize_from1().await;
+                        //is_send(f);
                     });
 
                     // Handle the connection
@@ -448,28 +643,56 @@ mod core {
                 }
             });
         }
+
+        async fn handle_connection(&'static self, mut socket: TcpStream) {
+            let req_info = self.request_factory.create_request_info();
+            let serializer = self.request_factory.create_request_serializer();
+            let mut buf_reader = BufReader::new(&mut socket);
+            //serializer.serialize_to(req_info, socket, self.request_factory.get_request_spec(),).await;
+             let request_info = serializer
+                .deserialize_from(
+                    req_info,
+                    &mut buf_reader,
+                    self.request_factory.get_request_spec(),
+                )
+                .await
+                .unwrap(); 
+            let result = CFG::REQH::handle_request(
+                self.request_factory.create_request_handler(),
+                &request_info,
+            ).await;
+            match result {
+                Ok(response_info) => {
+                    let serializer = self.response_factory.create_response_serializer();
+                     serializer
+                        .serialize_to(
+                            response_info,
+                            socket,
+                            self.response_factory.get_response_spec(),
+                        )
+                        .await
+                        .unwrap(); 
+                }
+                Err(e) => {
+                    println!("Error handling request: {:?}", e);
+                }
+            } 
+        }
     }
 
-    impl<RQIB, RSIB, RQI, RSI> Server<RQI, RSI> for ServerInstance<RQIB, RSIB, RQI, RSI>
-    where
-        RQI: RequestInfo + Send + Sync,
-        RSI: ResponseInfo + Send + Sync,
-        RQIB: RequestInfoBuilder<RQI> + Send + Sync,
-        RSIB: ResponseInfoBuilder<RSI> + Send + Sync,
-    {
-        async fn start(&'static mut self) -> Result<(), ServerError>{
-            
+    impl<CFG: ProtocolConfig<TcpStream, TcpStream>> Server for ServerInstance<CFG> {
+        async fn start(&'static mut self) -> Result<(), ServerError> {
             //let host = String::new();
             self.create_listeners().await?;
             for listener in &self.listeners {
                 let _result = self.accept_connections(listener).await;
                 //println!("{:?}", listener);
             }
-            
+
             Ok(())
         }
 
-        async fn stop(&mut self) -> Result<(), ServerError>{
+        async fn stop(&mut self) -> Result<(), ServerError> {
             todo!()
         }
 
@@ -576,7 +799,7 @@ mod core {
                 name: place_holder_identifier,
                 place_holder_type,
                 constituents,
-                optional
+                optional,
             }
         }
 
@@ -585,13 +808,13 @@ mod core {
             name: String,
             constituents: Option<Vec<Placeholder>>,
             place_holder_type: PlaceHolderType,
-            optional: bool
+            optional: bool,
         ) -> Self {
             Placeholder {
                 name: PlaceHolderIdentifier::Key,
                 place_holder_type,
                 constituents,
-                optional
+                optional,
             }
         }
 
@@ -600,7 +823,7 @@ mod core {
             name: String,
             constituents: Option<Vec<Placeholder>>,
             place_holder_type: PlaceHolderType,
-            optional: bool
+            optional: bool,
         ) -> Self {
             Placeholder {
                 name: PlaceHolderIdentifier::InlineKeyWithValue(name),
@@ -614,13 +837,13 @@ mod core {
         pub fn new_value_placeholder(
             constituents: Option<Vec<Placeholder>>,
             place_holder_type: PlaceHolderType,
-            optional: bool
+            optional: bool,
         ) -> Self {
             Placeholder {
                 name: PlaceHolderIdentifier::Value,
                 place_holder_type,
                 constituents,
-                optional
+                optional,
             }
         }
     }
@@ -676,6 +899,35 @@ mod core {
         async fn read_string(until_delimiter: String) -> String;
     }
 
+    #[allow(unused)]
+    async fn parse_request<RI: RequestInfo, Reader: AsyncRead + Unpin>(
+        reader: Reader,
+        request_info: &mut RI,
+        request_spec: &Placeholder,
+    ) -> Result<(), ParserError> {
+        let mut protocol_reader =
+            crate::core::protocol_reader::ProtocolBuffReader::new(BufReader::new(reader), 1024);
+        protocol_reader
+            .parse_composite(request_info, request_spec)
+            .await?;
+        Ok(())
+    }
+
+    /* impl RequestParse for HttpParser {
+        async fn parse_request<RI: RequestInfo, Reader: AsyncRead + Unpin>(
+            &self,
+            reader: Reader,
+            request_info:&mut RI,
+            request_spec: &Placeholder,
+
+        ) -> Result<RI, ParserError> {
+            let protocol_reader = crate::core::protocol_reader::ProtocolBuffReader::new(BufReader::new(reader), 1024);
+            protocol_reader.parse_composite(request_info, request_spec).await?;
+            Ok(())
+
+        }
+    } */
+
     //struct SpecPlaceHolderParser<T>;
 
     /*impl <T> Future for SpecPlaceHolderParser<T>{
@@ -711,12 +963,13 @@ mod core {
         fn expect_space(&mut self) -> &mut Self;
 
         fn expect_composite(&mut self, place_holder: Placeholder, name: String) -> &mut Self;
-        fn expect_string(&mut self, identifier: PlaceHolderIdentifier, optional: bool) -> &mut Self;
+        fn expect_string(&mut self, identifier: PlaceHolderIdentifier, optional: bool)
+            -> &mut Self;
         fn expect_exact_string(
             &mut self,
             identifier: PlaceHolderIdentifier,
             input: String,
-            optional:bool,
+            optional: bool,
         ) -> &mut Self;
 
         fn expect_bytes(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
@@ -736,11 +989,16 @@ mod core {
             name: String,
         ) -> &mut Self;
 
-        fn expect_stream(&mut self, identifier: PlaceHolderIdentifier, name: String, optional:bool) -> &mut Self;
+        fn expect_stream(
+            &mut self,
+            identifier: PlaceHolderIdentifier,
+            name: String,
+            optional: bool,
+        ) -> &mut Self;
 
         //fn expect_key_string(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
 
-        fn expect_value_string(&mut self, optional:bool) -> &mut Self;
+        fn expect_value_string(&mut self, optional: bool) -> &mut Self;
 
         fn build(&mut self) -> Placeholder;
     }
@@ -795,7 +1053,7 @@ mod core {
             SpecBuilder(Placeholder {
                 name: PlaceHolderIdentifier::Name(name),
                 place_holder_type: PlaceHolderType::Composite,
-                constituents: Some(vec![]), 
+                constituents: Some(vec![]),
                 optional: false,
             })
         }
@@ -852,8 +1110,12 @@ mod core {
         }
 
         fn expect_string(&mut self, id: PlaceHolderIdentifier, optional: bool) -> &mut Self {
-            self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::AnyString, optional));
+            self.0.add_place_holder(Placeholder::new(
+                id,
+                None,
+                PlaceHolderType::AnyString,
+                optional,
+            ));
             return self;
         }
 
@@ -861,7 +1123,7 @@ mod core {
             &mut self,
             identifier: PlaceHolderIdentifier,
             input: String,
-            optional: bool
+            optional: bool,
         ) -> &mut Self {
             self.0.add_place_holder(Placeholder::new(
                 identifier,
@@ -896,8 +1158,12 @@ mod core {
             id: PlaceHolderIdentifier,
             optional: bool,
         ) -> &mut Self {
-            self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::OneOf(one_of), optional));
+            self.0.add_place_holder(Placeholder::new(
+                id,
+                None,
+                PlaceHolderType::OneOf(one_of),
+                optional,
+            ));
             return self;
         }
 
@@ -907,9 +1173,18 @@ mod core {
             return self;
         }
 
-        fn expect_stream(&mut self, id: PlaceHolderIdentifier, name: String, optional: bool) -> &mut Self {
-            self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::StreamValue(name), optional));
+        fn expect_stream(
+            &mut self,
+            id: PlaceHolderIdentifier,
+            name: String,
+            optional: bool,
+        ) -> &mut Self {
+            self.0.add_place_holder(Placeholder::new(
+                id,
+                None,
+                PlaceHolderType::StreamValue(name),
+                optional,
+            ));
             return self;
         }
 
@@ -917,7 +1192,8 @@ mod core {
             self.0.add_place_holder(Placeholder::new(
                 Name(name),
                 Some(vec![placeholder]),
-                PlaceHolderType::RepeatMany, false,
+                PlaceHolderType::RepeatMany,
+                false,
             ));
             return self;
         }
@@ -932,7 +1208,7 @@ mod core {
                 Name(name),
                 Some(vec![placeholder]),
                 PlaceHolderType::RepeatN(repeat_count),
-                false,  
+                false,
             ));
             return self;
         }
@@ -949,8 +1225,8 @@ mod core {
         /*pub trait Parser {
             fn parse<'a, T: RequestInfo<'a>>(&self, t: T) -> Result<(), ParserError>;
         }*/
-        #[allow(unused)]
-        async fn parse_request<P: RequestParser, T: RequestInfo, RequestStream>(
+        /* #[allow(unused)]
+        async fn parse_request<P: RequestParse, T: RequestInfo, RequestStream>(
             request_stream: RequestStream,
             parser: P,
         ) -> Result<T, ParserError>
@@ -959,7 +1235,7 @@ mod core {
         {
             let result = parser.parse_request(request_stream).await;
             return result;
-        }
+        } */
 
         pub trait RequestValidator<T> {
             type Input: IntoIterator<Item = T>;
@@ -1087,7 +1363,7 @@ mod core {
         }
     }
 
-    mod protocol_reader;
+    pub(crate) mod protocol_reader;
     mod protocol_writer;
 }
 
@@ -1115,18 +1391,16 @@ mod tests {
 }
 
 #[cfg(test)]
-mod test_utils{
+mod test_utils {
     use std::collections::HashMap;
 
-    use crate::core::{RequestInfo, ValueType};
-
+    use crate::core::{InfoProvider, ValueType};
 
     pub fn assert_result_has_string(
         result: Result<Option<crate::core::ValueType>, crate::core::ParserError>,
         data: String,
     ) {
         match result {
-
             Ok(Some(crate::core::ValueType::String(value))) => {
                 assert!(value == data);
             }
@@ -1145,7 +1419,7 @@ mod test_utils{
         }
     }
 
-    impl RequestInfo for TestRequestInfo {
+    impl InfoProvider for TestRequestInfo {
         fn add_info(&mut self, key: String, value: ValueType) {
             self.0.insert(key, value);
         }
@@ -1153,13 +1427,11 @@ mod test_utils{
         fn get_info(&self, key: &String) -> Option<&crate::core::ValueType> {
             self.0.get(key)
         }
-        
-        fn get_keys_by_group_name(&self, _name:String) -> Option<Vec<String>> {
+
+        fn get_keys_by_group_name(&self, _name: String) -> Option<Vec<&String>> {
             let mut keys = Vec::new();
             for (key, _value) in &self.0 {
-                
-                    keys.push(key.clone());
-                
+                keys.push(key);
             }
             if keys.is_empty() {
                 None
@@ -1167,7 +1439,7 @@ mod test_utils{
                 Some(keys)
             }
         }
-        
+
         fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType> {
             if let Some(value) = self.0.get_mut(key) {
                 Some(value)

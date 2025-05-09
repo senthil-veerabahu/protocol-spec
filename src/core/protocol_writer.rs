@@ -4,7 +4,7 @@ use std::{
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use super::{ParserError, PlaceHolderType, Placeholder, RequestInfo};
+use super::{InfoProvider, ParserError, PlaceHolderType, Placeholder};
 
 #[pin_project]
 pub(super) struct ProtocolBuffWriter<R>
@@ -61,12 +61,12 @@ where
     pub(super) async fn write_composite<RI>(
         &mut self,
         placeholder: &Placeholder,
-        request_info: &mut RI,
+        request_info: &RI,
         key:  Option<&String>,
         
     ) -> Result<(), ParserError>
     where
-        RI: RequestInfo,
+        RI: InfoProvider,
     {
         match &placeholder.constituents {
             None => {
@@ -153,7 +153,7 @@ where
         Ok(())  
     }
 
-    async fn prepare_and_write_data<RI:RequestInfo>(&mut self, request_info: &mut RI, mut data:  Option<&String>, constituent: &Placeholder, overriding_data: Option<&String>) -> Result<(), ParserError> {
+    async fn prepare_and_write_data<RI:InfoProvider>(&mut self, request_info: &RI, mut data:  Option<&String>, constituent: &Placeholder, overriding_data: Option<&String>) -> Result<(), ParserError> {
         if data.is_none() && overriding_data.is_none() {
             match &constituent.name {
                
@@ -190,7 +190,7 @@ where
             crate::core::PlaceHolderIdentifier::Value => {
                 
                 if overriding_data.is_none(){
-                    let value = request_info.get_info_mut(data.unwrap());
+                    let value = request_info.get_info(data.unwrap());
                     if let Some(value) = value {
                         value.write(&mut self.inner).await?;
                         return Ok(());
@@ -204,7 +204,7 @@ where
             }
             crate::core::PlaceHolderIdentifier::InlineKeyWithValue(key) => {
                 if overriding_data.is_none(){
-                    let value = request_info.get_info_mut(key);
+                    let value = request_info.get_info(key);
                     if let Some(value) = value {
                         value.write(&mut self.inner).await?;
                         return Ok(());
@@ -236,7 +236,7 @@ mod tests {
     use crate::core::protocol_writer::ProtocolBuffWriter;
     use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        PlaceHolderType, Placeholder, ProtocolSpecBuilder, RequestInfo, SpecBuilder, ValueType
+        InfoProvider, PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder, ValueType
     };
     
 
@@ -246,12 +246,13 @@ mod tests {
     impl TestRequestInfo {
         pub fn new() -> Self {
             let mut r = TestRequestInfo(HashMap::new());
-            r.0.insert("data".to_owned(), ValueType::String("hello".to_string()));
+            r.0.insert("data".to_owned(), ValueType::String("test".to_string()));
+            r.0.insert("data1".to_owned(), ValueType::String("test1".to_string()));
             return r;
         }
     }
 
-    impl RequestInfo for TestRequestInfo {
+    impl InfoProvider for TestRequestInfo {
         fn add_info(&mut self, key: String, value: ValueType) {
             self.0.insert(key, value);
         }
@@ -260,14 +261,11 @@ mod tests {
             self.0.get(key)
         }
         
-        fn get_keys_by_group_name(&self, _name:String) -> Option<Vec<String>> {
-            let mut keys = Vec::new();
-            keys.push("data".to_string());
-            if keys.is_empty() {
-                None
-            } else {
-                Some(keys)
+        fn get_keys_by_group_name(&self, _name:String) -> Option<Vec<&String>>{
+            if _name == "headers" {
+                return Some(self.0.keys().filter(|k| k.starts_with("data")).collect());
             }
+            Some(self.0.keys().collect())
         }
         
         fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType> {
@@ -341,7 +339,8 @@ mod tests {
         sender.shutdown().await.unwrap();
         let mut result = String::new();
         let _r = receiver.read_to_string(&mut result).await;
-        assert_eq!(result, "GET / HTTP/1.1\ndata: hello\n\nhello");
+        assert!(result == "GET / HTTP/1.1\ndata1: test1\ndata: test\n\nhello" || result == "GET / HTTP/1.1\ndata: test\ndata1: test1\n\nhello");
+        println!("Result: {}", result);
 
         
     }

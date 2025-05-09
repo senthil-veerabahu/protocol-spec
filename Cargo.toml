@@ -9,6 +9,7 @@ tokio-stream = "0.1.17"
 tokio-macros = { version = "0.2.0-alpha.6" }
 pin-project = "1.1.10"
 memchr = "2.7.4"
+async-trait = "0.1.88"
 
 
 

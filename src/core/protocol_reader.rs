@@ -9,8 +9,10 @@ use tokio_stream::Stream;
 use crate::core::{
     ParserError,
     PlaceHolderIdentifier::{InlineKeyWithValue, Key, Value},
-    PlaceHolderType, PlaceHolderValue, Placeholder, RequestInfo, ValueType,
+    PlaceHolderType, PlaceHolderValue, Placeholder, ValueType,
 };
+
+use super::InfoProvider;
 
 /* fn poll_test<'a, R, F, T>(reader: &mut ProtocolBuffReader<R>, cx:&mut Context<'a>) -> F where R: AsyncBufRead + Unpin, F: FnMut(&mut Context<'_>) -> Poll<T>, {
     |cx| {
@@ -666,11 +668,12 @@ where
     #[allow(unused)]
     pub(super) async fn parse_composite<RI>(
         &mut self,
-        placeholder: &Placeholder,
         request_info: &mut RI,
+        placeholder: &Placeholder,
+        
     ) -> Result<(), ParserError>
     where
-        RI: RequestInfo,
+        RI: InfoProvider,
     {
         match &placeholder.constituents {
             None => {
@@ -688,10 +691,10 @@ where
                     let constituent = &constituents[i];
                     match &constituent.place_holder_type {
                         PlaceHolderType::Composite => {
-                            Box::pin(self.parse_composite(constituent, request_info)).await?;
+                            Box::pin(self.parse_composite( request_info, constituent,)).await?;
                         }
                         PlaceHolderType::RepeatN(n) => {
-                            Box::pin(self.parse_composite(constituent, request_info)).await?;
+                            Box::pin(self.parse_composite(request_info, constituent, )).await?;
                         }
                         PlaceHolderType::RepeatMany => {
                             let mut count = 0;
@@ -705,7 +708,7 @@ where
                             loop {
                                 self.mark();
                                 let result =
-                                    Box::pin(self.parse_composite(constituent, request_info)).await;
+                                    Box::pin(self.parse_composite(request_info, constituent, )).await;
                                 if result.is_err() && is_eof_error(result.as_ref().err().unwrap()) {
                                     if count > 0 {
                                         self.reset();
@@ -927,7 +930,7 @@ fn update_key_value<RI>(
     char_pos: usize,
 ) -> Result<(), ParserError>
 where
-    RI: RequestInfo,
+    RI: InfoProvider,
 {
     let result = match &result {
         ValueType::String(data) => match &constituent.name {
@@ -974,9 +977,10 @@ mod tests {
     use crate::core::protocol_reader::ProtoStream;
     use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        PlaceHolderType, Placeholder, ProtocolSpecBuilder, RequestInfo, SpecBuilder,
+        PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder,
     };
     use crate::test_utils::{assert_result_has_string, TestRequestInfo};
+    use crate::core::InfoProvider;
 
     use super::{PlaceHolderRead, ProtocolBuffReader};
     
@@ -1315,7 +1319,7 @@ mod tests {
         );
         let mut request_info = TestRequestInfo::default();
         let result = protocol_reader
-            .parse_composite(&placehoder, &mut request_info)
+            .parse_composite(&mut request_info, &placehoder, )
             .await;
         println!("Result: {:?}", result);
         assert!(result.is_ok());
@@ -1371,7 +1375,7 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
-        let result = protocol_reader.parse_composite(&root, &mut request_info).await;
+        let result = protocol_reader.parse_composite(&mut request_info, &root).await;
         
 
         
@@ -1409,7 +1413,7 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
-        let result = protocol_reader.parse_composite(&root, &mut request_info).await;
+        let result = protocol_reader.parse_composite(&mut request_info, &root).await;
         
 
         
@@ -1447,7 +1451,7 @@ mod tests {
             .build();
 
         let mut request_info = TestRequestInfo::new();
-        let result = protocol_reader.parse_composite(&spec, &mut request_info).await;
+        let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
         match result {
             Ok(_) => {
                 let first_word = request_info.get_info(&"first_word".to_string()).unwrap();
