@@ -1,9 +1,9 @@
 use memchr::memmem::Finder;
 use pin_project::pin_project;
 use std::{
-     future::Future, io::{self}, pin::Pin, task::{Context, Poll}
+     fmt::Display, future::Future, io::{self}, pin::Pin, task::{Context, Poll}, time::Duration
 };
-use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
+use tokio::{io::{AsyncBufRead, AsyncRead, ReadBuf}, time::timeout};
 use tokio_stream::Stream;
 
 use crate::core::{
@@ -12,7 +12,7 @@ use crate::core::{
     PlaceHolderType, PlaceHolderValue, Placeholder, ValueType,
 };
 
-use super::InfoProvider;
+use super::{InfoProvider, ValueExtractor};
 
 /* fn poll_test<'a, R, F, T>(reader: &mut ProtocolBuffReader<R>, cx:&mut Context<'a>) -> F where R: AsyncBufRead + Unpin, F: FnMut(&mut Context<'_>) -> Poll<T>, {
     |cx| {
@@ -91,15 +91,27 @@ trait PlaceHolderRead {
         self: &'a mut Self,
         placeholder: &'b Placeholder,
         input: String,
+     
     ) -> Result<Option<ValueType>, ParserError>
     where
         'a: 'b;
 
     #[allow(unused)]
-    async fn read_placeholder_until<'a, 'b>(
+    async fn read_placeholder_until<'a, 'b, IP: InfoProvider>(
         self: &'a mut Self,
         placeholder: &'b Placeholder,
         delimiter: String,
+        info_provider: &IP,        
+    ) -> Result<Option<ValueType>, ParserError>
+    where
+        'a: 'b;
+
+
+    #[allow(unused)]
+    async fn read_bytes<'a, 'b>(
+        self: &'a mut Self,
+        placeholder: &'b Placeholder,
+        size: ReadBytesSize,
     ) -> Result<Option<ValueType>, ParserError>
     where
         'a: 'b;
@@ -221,10 +233,10 @@ where
     }
 
     fn consume(&mut self, amount: usize) {
-        if self.pos + amount > self.cap {
+       /*  if self.pos + amount > self.cap {
             self.buf.clear();
             self.pos = 0;
-        }
+        } */
         if self.pos >= self.buf.len() / 2 && !self.marked {
             self.buf.drain(0..self.pos + amount);
             self.pos = 0;
@@ -259,8 +271,8 @@ where
         self.buf.len() - self.pos + 1
     }
 
-    fn buf_has_enough_data(&self, size: usize) -> bool {
-        self.buf.len() - self.pos + 1 >= size
+    fn buf_has_enough_data(&self, bytes_size: &ReadBytesSize) -> bool {
+            (self.buf.len() - self.pos + 1) as u32 >= bytes_size.get_value()
     }
 
     #[allow(unused)]
@@ -308,7 +320,13 @@ where
 
     #[allow(unused)]
     fn get_current_buffer(&self) -> &[u8] {
-        &self.buf[self.pos..]
+        if self.buf.is_empty() {
+            return &[];
+        }
+        let data = &self.buf[self.pos..];
+        println!("-{}-", String::from_utf8_lossy(data));
+        data
+        
     }
 
     #[allow(unused)]
@@ -320,14 +338,155 @@ where
     }
 }
 
+
+enum ReadBytesSize{
+    Fixed(u32),
+    Full,
+}
+
+impl ReadBytesSize {
+    fn get_value(&self) -> u32 {
+        match self {
+            ReadBytesSize::Fixed(size) => *size,
+            ReadBytesSize::Full => u32::MAX, // or usize::MAX, depending on your use case
+        }
+    }
+
+    fn is_full(&self) -> bool {
+        matches!(self, ReadBytesSize::Full)
+    }
+}
+
+impl Display for ReadBytesSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadBytesSize::Fixed(size) => write!(f, "Fixed({})", size),
+            ReadBytesSize::Full => write!(f, "Full"),
+        }
+    }
+}
+
+
 #[pin_project]
-struct ReadPlaceHolderUntil<'a, R>
+struct ReadBytes<'a, R>
 where
     R: AsyncBufRead + Unpin,
 {
     protocol_reader: &'a mut ProtocolBuffReader<R>,
     placeholder: &'a Placeholder,
+    size: ReadBytesSize,
+    
+}
+
+impl <'a, R> ReadBytes<'a, R>
+where
+    R: AsyncBufRead + Unpin,
+{
+    fn new(
+        protocol_reader: &'a mut ProtocolBuffReader<R>,
+        placeholder: &'a Placeholder,
+        size: ReadBytesSize,
+    ) -> Self {
+        ReadBytes {
+            protocol_reader,
+            placeholder,
+            size,
+        }
+    }
+}
+
+impl<'a, R> Future for ReadBytes<'a, R>
+where
+    R: AsyncBufRead + Unpin,
+{
+    type Output = Result<Option<ValueType>, ParserError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let mut this = self.project();
+
+        let placeholder = this.placeholder;
+        let read_bytes_expected_size = this.size;
+        let protocol_reader = &mut this.protocol_reader;
+        
+        protocol_reader.mark_if_optional(placeholder);
+        loop {
+            let buf = protocol_reader.get_buffer();
+            if buf.len() == 0 || !protocol_reader.buf_has_enough_data(read_bytes_expected_size) {
+                let result = protocol_reader.fill_buf(cx);
+                match result {
+                    Poll::Ready(Ok(read_length)) => {
+                        if read_length > 0 {
+                            continue;
+                        } else {
+                            if let ReadBytesSize::Fixed(size) = read_bytes_expected_size {
+                                
+                                protocol_reader.unmark_if_optional(placeholder);
+                                if placeholder.optional {
+                                    return Poll::Ready(Ok(None));
+                                }else{
+                                    return Poll::Ready(Err(ParserError::TokenExpected {
+                                        line_index: protocol_reader.line_index,
+                                        char_index: protocol_reader.char_index_in_line,
+                                        message: format!("Expected bytes of size {} not found, EOF reached",size),
+                                    }));
+                                }
+
+                            }
+                            
+                        }
+                    }
+                    Poll::Pending => {
+                        //todo: check if pending needs to be handled differently
+                        if let ReadBytesSize::Fixed(size) = read_bytes_expected_size {
+                            return Poll::Pending;
+                        }
+                    }
+                    Poll::Ready(Err(e)) => {
+                        return Poll::Ready(Err(ParserError::IOError { error: e }));
+                    }
+                };
+            }
+            let buf = protocol_reader.get_buffer();
+            let pos = protocol_reader.pos;
+            if let ReadBytesSize::Fixed(size) = read_bytes_expected_size {
+                let size = *size as usize;
+                if pos + size -1 < buf.len() {
+                    return Poll::Ready(Ok(Some(
+                        PlaceHolderValue::parse(
+                            &placeholder.place_holder_type,
+                            &buf[pos..pos + size],
+                        )
+                    )));
+                } else {
+                    return Poll::Ready(Err(ParserError::TokenExpected {
+                        line_index: protocol_reader.line_index,
+                        char_index: protocol_reader.get_error_char_index(),
+                        message: "Expected token not found, EOF reached".to_string(),
+                    }));
+                }
+
+            }else {
+                return Poll::Ready(Ok(Some(
+                    PlaceHolderValue::parse(
+                        &placeholder.place_holder_type,
+                        &buf[pos..buf.len()],
+                    )
+                )));
+            }            
+        }
+    }
+}
+
+#[pin_project]
+struct ReadPlaceHolderUntil<'a, R, IP>
+where
+    R: AsyncBufRead + Unpin,
+    IP:InfoProvider,
+{
+    protocol_reader: &'a mut ProtocolBuffReader<R>,
+    placeholder: &'a Placeholder,
     delimiter: String,
+    info_provider: &'a IP,
 }
 
 #[pin_project]
@@ -340,26 +499,30 @@ where
     input: String,
 }
 
-impl<'a, R> ReadPlaceHolderUntil<'a, R>
+impl<'a, R, IP> ReadPlaceHolderUntil<'a, R, IP>
 where
     R: AsyncBufRead + Unpin,
+    IP: InfoProvider,
 {
     fn new(
         protocol_reader: &'a mut ProtocolBuffReader<R>,
         placeholder: &'a Placeholder,
         delimiter: String,
+        info_provider: &'a IP,
     ) -> Self {
         ReadPlaceHolderUntil {
             protocol_reader,
             placeholder,
             delimiter,
+            info_provider,
         }
     }
 }
 
-impl<'a, R> Future for ReadPlaceHolderUntil<'a, R>
+impl<'a, R, IP> Future for ReadPlaceHolderUntil<'a, R, IP>
 where
     R: AsyncBufRead + Unpin,
+    IP: InfoProvider,
 {
     type Output = Result<Option<ValueType>, ParserError>;
 
@@ -368,7 +531,7 @@ where
         let placeholder = this.placeholder;
         let delimiter = this.delimiter;
         let protocol_reader = &mut this.protocol_reader;
-        if protocol_reader.pos < (protocol_reader.cap - 1) {
+        //if protocol_reader.pos < (protocol_reader.cap - 1) {
             protocol_reader.mark_if_optional(placeholder);
             //let pinned_reader = Pin::new(&mut protocol_reader.inner);
             if let Some(value) = perform_search(cx, placeholder, delimiter, protocol_reader) {
@@ -395,15 +558,19 @@ where
                             }
                         }
                     },
-                    Poll::Pending => {
+                    Poll::Pending => { 
+                        if this.info_provider.has_all_data() {
+                            protocol_reader.unmark_if_optional(placeholder);
+                            return Poll::Ready(Err(ParserError::EndOfStream));
+                        }
                         return Poll::Pending;
                     }
                 }
             }
             Poll::Ready(Err(protocol_reader.error_token_expected_eof_reached()))
-        } else {
+        /* } else {
             Poll::Ready(Err(protocol_reader.error_token_expected_eof_reached()))
-        }
+        } */
     }
 }
 
@@ -539,7 +706,7 @@ where
 {
     loop {
         let buf = protocol_reader.get_buffer();
-        if buf.len() == 0 || !protocol_reader.buf_has_enough_data(input.len()) {
+        if buf.len() == 0 || !protocol_reader.buf_has_enough_data(&ReadBytesSize::Fixed(input.len() as u32)) {
             let result = protocol_reader.fill_buf(cx);
             match result {
                 Poll::Ready(Ok(read_length)) => {
@@ -561,6 +728,8 @@ where
         }
         let buf = protocol_reader.get_buffer();
         let pos = protocol_reader.pos;
+        println!("input get bytes {:?}, len {}", input.as_bytes(), input.as_bytes().len());
+        println!("buf  get byets {:?}, len {}", &buf[pos..pos + input.len()], &buf[pos..pos + input.len()].len());
         if &buf[pos..pos + input.len()] == input.as_bytes() {
             return Some(Poll::Ready(Ok(pos)));
         } else {
@@ -577,16 +746,22 @@ impl<T> PlaceHolderRead for ProtocolBuffReader<T>
 where
     T: AsyncBufRead + Unpin,
 {
-    async fn read_placeholder_until<'a, 'b>(
+    async fn read_placeholder_until<'a, 'b, IP>(
         self: &'a mut Self,
         placeholder: &'b Placeholder,
         delimiter: String,
+        info_provider: &IP,
     ) -> Result<Option<ValueType>, ParserError>
     where
         'a: 'b,
+        IP:InfoProvider
     {
-        let data = ReadPlaceHolderUntil::new(self, placeholder, delimiter).await?;
-        Ok(data)
+        let data = timeout(Duration::from_secs(1), ReadPlaceHolderUntil::new(self, placeholder, delimiter, info_provider)).await;
+        match data {
+            Ok(Ok(data)) => Ok(data),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(ParserError::EndOfStream),
+        }
     }
 
     async fn read_placeholder_as_string<'a, 'b>(
@@ -597,8 +772,27 @@ where
     where
         'a: 'b,
     {
-        let data = ReadString::new(self, placeholder, input).await?;
-        Ok(data)
+        let data = timeout(Duration::from_secs(1),ReadString::new(self, placeholder, input)).await;
+        match data {
+            Ok(Ok(data)) => Ok(data),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(ParserError::EndOfStream),
+        }
+    }
+    
+    async fn read_bytes<'a, 'b>(
+        self: &'a mut Self,
+        placeholder: &'b Placeholder,
+        size: ReadBytesSize,
+    ) -> Result<Option<ValueType>, ParserError>
+    where
+        'a: 'b {
+            let data = timeout(Duration::from_secs(1), ReadBytes::new(self, placeholder, size)).await;
+            match data {
+                Ok(Ok(data)) => Ok(data),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(ParserError::EndOfStream),
+            }
     }
 }
 
@@ -610,7 +804,8 @@ fn is_eof_error(parse_error: &ParserError) -> bool {
             } else {
                 false
             }
-        }
+        },
+        ParserError::EndOfStream => true,
         _ => false,
     }
 }
@@ -691,154 +886,195 @@ where
                     let constituent = &constituents[i];
                     match &constituent.place_holder_type {
                         PlaceHolderType::Composite => {
-                            Box::pin(self.parse_composite( request_info, constituent,)).await?;
-                        }
+                                                Box::pin(self.parse_composite( request_info, constituent,)).await?;
+                                            }
                         PlaceHolderType::RepeatN(n) => {
-                            Box::pin(self.parse_composite(request_info, constituent, )).await?;
-                        }
+                                                Box::pin(self.parse_composite(request_info, constituent, )).await?;
+                                            }
                         PlaceHolderType::RepeatMany => {
-                            let mut count = 0;
-                            let header_name = match &constituent.name {
-                                crate::core::PlaceHolderIdentifier::Name(name) => {
-                                    Some(name.to_owned())    
-                                }
+                                                let mut count = 0;
+                                                let header_name = match &constituent.name {
+                                                    crate::core::PlaceHolderIdentifier::Name(name) => {
+                                                        Some(name.to_owned())    
+                                                    }
                                 
-                                _ => None,
-                            };
-                            loop {
-                                self.mark();
-                                let result =
-                                    Box::pin(self.parse_composite(request_info, constituent, )).await;
-                                if result.is_err() && is_eof_error(result.as_ref().err().unwrap()) {
-                                    if count > 0 {
-                                        self.reset();
-                                        break;
-                                    } else {
-                                        return result;
-                                    }
-                                } else if result.is_err()
-                                    && !is_eof_error(result.as_ref().err().unwrap())
-                                {
-                                    if count > 0 {
-                                        self.reset();
-                                        break;
-                                    } else {
-                                        return result;
-                                    }
-                                } else if result.is_ok() {
-                                    count += 1;
-                                    self.unmark();
-                                }
-                            }
-                        }
+                                                    _ => None,
+                                                };
+                                                loop {
+                                                    self.mark();
+                                                    let result =
+                                                        Box::pin(self.parse_composite(request_info, constituent, )).await;
+                                                    if result.is_err() && is_eof_error(result.as_ref().err().unwrap()) {
+                                                        if count > 0 {
+                                                            self.reset();
+                                        
+                                                            break;
+                                                        } else {
+                                                            return result;
+                                                        }
+                                                    } else if result.is_err()
+                                                        && !is_eof_error(result.as_ref().err().unwrap())
+                                                    {
+                                                        if count > 0 {
+                                                            self.reset();
+                                                            break;
+                                                        } else {
+                                                            return result;
+                                                        }
+                                                    } else if result.is_ok() {
+                                                        count += 1;
+                                                        self.unmark();
+                                                    }
+                                                }
+                                            }
                         PlaceHolderType::ExactString(input) => {
-                            //self.mark_if_optional(constituent);
-                            let value_type = self
-                                .read_placeholder_as_string(constituent, input.to_string())
-                                .await;
-                            /* if value_type.is_err() {
+                                                //self.mark_if_optional(constituent);
+                                                let value_type = self
+                                                    .read_placeholder_as_string(constituent, input.to_string())
+                                                    .await;
+                                                /* if value_type.is_err() {
                                 self.reset_if_optional(placeholder);
                             }else */{
-                                match value_type {
-                                    Ok(Some(v)) => {
-                                        self.increment_char_index_by(input.len());
-                                        update_key_value(
-                                            request_info,
-                                            &mut key,                               
-                                            constituent,
-                                            v,
-                                            self.line_index,
-                                            self.char_index_in_line,
-                                        )?;
-                                    }
+                                                    match value_type {
+                                                        Ok(Some(v)) => {
+                                                            self.increment_char_index_by(input.len());
+                                                            update_key_value(
+                                                                request_info,
+                                                                &mut key,                               
+                                                                constituent,
+                                                                v,
+                                                                self.line_index,
+                                                                self.char_index_in_line,
+                                                            )?;
+                                                        }
 
-                                    Ok(None) => {
-                                    }
-                                    Err(e) => {
-                                        if !placeholder.optional{
-                                            return Err(e);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
+                                                        Ok(None) => {
+                                                        }
+                                                        Err(e) => {
+                                                            if !placeholder.optional{
+                                                                return Err(e);
+                                                            }
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
                         PlaceHolderType::AnyString => {
-                            //Self::update_key(&mut key, constituent, None);
-                            let value_type_option = self
-                                .read_delimited_string(constituent, constituents, &mut i)
-                                .await?;
+                                                //Self::update_key(&mut key, constituent, None);
+                                                let value_type_option = self
+                                                    .read_delimited_string(constituent, constituents, &mut i, request_info)
+                                                    .await?;
 
 
-                            match &value_type_option {
-                                Some(ValueType::String(data)) => {
-                                    self.increment_char_index_by(data.len());
+                                                match &value_type_option {
+                                                    Some(ValueType::String(data)) => {
+                                                        self.increment_char_index_by(data.len());
+                                                        update_key_value(
+                                                            request_info,
+                                                            &mut key,                                
+                                                            constituent,
+                                                            ValueType::String(data.to_owned()),
+                                                            self.line_index,
+                                                            self.char_index_in_line,
+                                                        )?;
+                                                    }
+                                                    None => {
+                                                    }
+                                                    _ => {}
+                                                }
+                            
+                             
+                                                i += 1;
+                                            }
+                        PlaceHolderType::StreamValue(name) => {
+                                                // let x = Box::pin(self.as_stream());
+                                                todo!()
+                                            }
+                        PlaceHolderType::OneOf(items) => {
+                                                let value_type_option = self
+                                                    .read_delimited_string(constituent, constituents, &mut i, request_info)
+                                                    .await?;
+                                                i += 1;
+
+                                                match &value_type_option {
+                                                    Some(ValueType::String(str)) => {
+                                                        update_key(&mut key, constituent, Some(str.to_owned()));
+                                                        if items.contains(str) {
+                                                            self.increment_char_index_by(str.len());
+                                                            request_info.add_info(key.unwrap(), ValueType::String(str.to_owned()));
+                                                            key = None;
+                                        
+                                                            //return Ok(());
+                                                        } else {
+                                                            return Err(self.error_token_expected_eof_reached());
+                                                        }
+                                                    }
+                                                    None => {}
+                                                    _ => {
+                                                        return Err(self.error_token_expected_eof_reached());
+                                                    }
+                                                }
+                                            },
+                   
+                        PlaceHolderType::BytesOfSizeN(size) => {
+                            let size = *size as usize;
+                            let value_type_option = Box::pin(
+                                self.read_bytes( constituent,
+                                     ReadBytesSize::Fixed(size as u32))).await?;
+                            match value_type_option {
+                                Some(value_type) => {
+                                    self.increment_char_index_by(size);
                                     update_key_value(
                                         request_info,
                                         &mut key,                                
                                         constituent,
-                                        ValueType::String(data.to_owned()),
+                                        value_type,
                                         self.line_index,
                                         self.char_index_in_line,
                                     )?;
                                 }
-                                None => {
-                                }
-                                _ => {}
+                                None => {}
                             }
-                            
-                             
-                            i += 1;
-                        }
-                        PlaceHolderType::StreamValue(name) => {
-                            // let x = Box::pin(self.as_stream());
-                            todo!()
-                        }
-                        PlaceHolderType::OneOf(items) => {
-                            let value_type_option = self
-                                .read_delimited_string(constituent, constituents, &mut i)
-                                .await?;
-                            i += 1;
-
-                            match &value_type_option {
-                                Some(ValueType::String(str)) => {
-                                    update_key(&mut key, constituent, Some(str.to_owned()));
-                                    if items.contains(str) {
-                                        self.increment_char_index_by(str.len());
-                                        request_info.add_info(key.unwrap(), ValueType::String(str.to_owned()));
-                                        key = None;
-                                        
-                                        //return Ok(());
-                                    } else {
-                                        return Err(self.error_token_expected_eof_reached());
+                        },
+                        PlaceHolderType::BytesOfSizeFromHeader(header_name, ) => {
+                            if let Some(header_value) =  request_info.get_info(header_name){
+                                if let Some(size) = header_value.get_unsigned_num_32_value(){
+                                    
+                                    let value_type_option = Box::pin(ReadBytes::new(self, constituent, ReadBytesSize::Fixed(size))).await?;
+                                    //self.increment_char_index_by(size);
+                                    if let Some(value_type) = value_type_option {
+                                        update_key_value(
+                                            request_info,
+                                            &mut key,                                
+                                            constituent,
+                                            value_type,
+                                            self.line_index,
+                                            self.char_index_in_line,
+                                        )?;
                                     }
                                 }
-                                None => {}
-                                _ => {
-                                    return Err(self.error_token_expected_eof_reached());
-                                }
                             }
-                        }
-                        PlaceHolderType::Bytes => todo!(),
+                        },
                         PlaceHolderType::Space => {
-                            let result = self
-                                .read_placeholder_as_string(constituent, " ".to_string())
-                                .await?;
-                            self.increment_char_index();
-                        }
+                                                let result = self
+                                                    .read_placeholder_as_string(constituent, " ".to_string())
+                                                    .await?;
+                                                self.increment_char_index();
+                                            }
                         PlaceHolderType::NewLine => {
-                            let result = self
-                                .read_placeholder_as_string(constituent, "\n".to_string())
-                                .await?;
-                            self.increment_line_index();
+                                                let result = self
+                                                    .read_placeholder_as_string(constituent, "\r\n".to_string())
+                                                    .await?;
+                                                self.increment_line_index();
 
-                        }
+                                            }
                         PlaceHolderType::Delimiter(delim) => {
-                            let result = self
-                                .read_placeholder_as_string(constituent, delim.to_string())
-                                .await?;
-                            self.increment_char_index();
-                        }
+                                                let result = self
+                                                    .read_placeholder_as_string(constituent, delim.to_string())
+                                                    .await?;
+                                                self.increment_char_index();
+                                            }
+                        PlaceHolderType::Bytes => todo!(),
                     }
                     i += 1;
                 }
@@ -868,15 +1104,16 @@ where
 
     
     
-    async fn read_delimited_string(
+    async fn read_delimited_string<RI:InfoProvider>(
         &mut self,
         placeholder: &Placeholder,
         constituents: &Vec<Placeholder>,
         i: &mut usize,
+        info_provider: &RI,
     ) -> Result<Option<ValueType>, ParserError> {
         let delimiter = self.get_delimiter(constituents, i).await?;
         let result = self
-        .read_placeholder_until(placeholder, delimiter.to_owned())
+        .read_placeholder_until(placeholder, delimiter.to_owned(), info_provider)
         .await?;
     Ok(result)
         
@@ -890,7 +1127,7 @@ where
         if constituents.len() > *i + 1 {
             let delimiter = match &constituents[*i + 1].place_holder_type {
                 PlaceHolderType::Delimiter(delimiter) => delimiter,
-                PlaceHolderType::NewLine => "\n",
+                PlaceHolderType::NewLine => "\r\n",
 
                 PlaceHolderType::Space => " ",
                 PlaceHolderType::ExactString(input) => input,
@@ -921,7 +1158,49 @@ where
     }
 }
 
-fn update_key_value<RI>(
+fn handle_type<RI>(
+    request_info: &mut RI,
+    key: &mut Option<String>,    
+    constituent: &Placeholder,
+    result: ValueType,
+    data: Option<String>,
+    line_pos: usize,
+    char_pos: usize,
+) -> Result<(), ParserError>
+where RI: InfoProvider {
+    match &constituent.name {
+        Key => {
+            update_key(key, constituent, data);
+            return Ok(());
+        },
+        InlineKeyWithValue(key_name) => {
+            update_key(key, constituent, Some(key_name.to_string()));
+            if key.is_none() {
+                return Err(ParserError::MissingKey);
+            }
+            //value = Some(key_name.to_owned());
+            request_info.add_info(key.as_ref().unwrap().to_owned(), result);
+            return Ok(());
+        }
+        Value => {
+            //update_key(key, constituent, Some(data.to_string()));
+            if key.is_none() {
+                return Err(ParserError::MissingKey);
+            }
+            //value = Some(data.to_owned());
+            request_info.add_info(key.as_ref().unwrap().to_owned(), result);
+            return Ok(());
+        }
+
+    _ => {
+        Ok(())
+    }
+
+
+}
+}
+
+fn update_key_value1<RI>(
     request_info: &mut RI,
     key: &mut Option<String>,    
     constituent: &Placeholder,
@@ -968,6 +1247,38 @@ where
     Ok(result)
 }
 
+
+fn update_key_value<RI>(
+    request_info: &mut RI,
+    key: &mut Option<String>,    
+    constituent: &Placeholder,
+    result: ValueType,
+    line_pos: usize,
+    char_pos: usize,
+) -> Result<(), ParserError>
+where
+    RI: InfoProvider,
+{
+    match &result {
+        ValueType::String(data) => {
+            let data = data.to_owned();
+            handle_type(request_info, key, constituent, result, Some(data), line_pos, char_pos)
+        },
+        ValueType::U8Vec(data) => {
+            handle_type(request_info, key, constituent, result, None, line_pos, char_pos)
+        },
+        _ => {
+            Err(
+                ParserError::TokenExpected {
+                line_index: line_pos,
+                char_index: char_pos,
+                message: "Expected String token not found".to_string(),
+            })?
+        }
+    }
+    
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -982,12 +1293,14 @@ mod tests {
     use crate::test_utils::{assert_result_has_string, TestRequestInfo};
     use crate::core::InfoProvider;
 
+    
     use super::{PlaceHolderRead, ProtocolBuffReader};
     
 
     #[tokio::test]
     async fn test_read_string_until() {
         let data = b"Hello World::";
+        let request_info = TestRequestInfo::new();
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let result = protocol_reader
             .read_placeholder_until(
@@ -997,6 +1310,7 @@ mod tests {
                     constituents: None, optional:false,
                 },
                 "::".to_string(),
+                &request_info,
             )
             .await;
 
@@ -1007,6 +1321,7 @@ mod tests {
     async fn test_read_string_until_delimiter_missing() {
         let data = b"Hello World";
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+        let request_info = TestRequestInfo::new();
         let result = protocol_reader
             .read_placeholder_until(
                 &Placeholder {
@@ -1016,6 +1331,7 @@ mod tests {
                     optional:false,
                 },
                 "::".to_string(),
+                &request_info,
             )
             .await;
         assert!(result.is_err());
@@ -1025,6 +1341,7 @@ mod tests {
     async fn test_read_string_until_delimiter_as_prefix() {
         let data = b"::Hello World";
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+
         let result = protocol_reader
             .read_placeholder_until(
                 &Placeholder {
@@ -1034,6 +1351,7 @@ mod tests {
                     optional:false,
                 },
                 "::".to_string(),
+                &TestRequestInfo::new(),
             )
             .await;
         assert_result_has_string(result, "".to_string());
@@ -1052,6 +1370,7 @@ mod tests {
                     optional:false,
                 },
                 " ".to_string(),
+                &TestRequestInfo::new()
             )
             .await;
         assert_result_has_string(result, "Hello".to_string());
@@ -1065,6 +1384,7 @@ mod tests {
                     optional:false,
                 },
                 "\n".to_string(),
+                &TestRequestInfo::new(),
             )
             .await;
         assert_result_has_string(result, "World".to_string());
@@ -1313,7 +1633,7 @@ mod tests {
         let placehoder = spec_builder.build();
         let mut protocol_reader = ProtocolBuffReader::new(
             BufReader::new(
-                b"GET /index.html HTTP/1.1\n\nname: value\nname2: value2\ntest123\n".as_ref(),
+                b"GET /index.html HTTP/1.1\r\n\r\nname: value\r\nname2: value2\r\ntest123\r\n".as_ref(),
             ),
             1024,
         );
@@ -1402,7 +1722,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_token_eof_error() {
-        let data = b"Hello World\n";
+        let data = b"Hello World\r\n";
         let mut spec = SpecBuilder::new("root".to_owned());
         let root = spec.expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)
             .expect_space()
@@ -1441,7 +1761,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proto_optional_test() {
-        let data = b"Hello \n";
+        let data = b"Hello \r\n";
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let spec = SpecBuilder::new("root".to_owned())
             .expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)

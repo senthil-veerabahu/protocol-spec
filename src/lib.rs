@@ -1,16 +1,17 @@
 //#![debugger_visualizer(natvis_file = "./Foo.natvis")]
 
-mod core {
+
+pub mod core {
     use crate::core::PlaceHolderIdentifier::Name;
     use crate::core::PlaceHolderType::OneOf;
     use async_trait::async_trait;
+    use derive_builder::Builder;
     use protocol_reader::ProtocolBuffReader;
 
     use protocol_writer::ProtocolBuffWriter;
 
     use std::{
-        fmt::{Debug, Display, Formatter},
-        mem::{self},
+        fmt::{Debug, Display, Formatter}, mem::{self}, str::Utf8Error
     };
     use tokio::{
         io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
@@ -46,6 +47,10 @@ mod core {
         MissingKey,
         MissingData,
         MissingValue(String),
+        SerdeError(String),
+        Utf8Error(Utf8Error),
+        EndOfStream,
+
         IOError {
             error: std::io::Error,
         },
@@ -55,52 +60,64 @@ mod core {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
                 ParserError::TokenExpected {
-                    line_index: line_pos,
-                    char_index: position,
-                    message,
-                } => {
-                    write!(
-                        f,
-                        "Token expected at line {} char_pos {} {}",
-                        line_pos, position, message
-                    )
-                }
+                                line_index: line_pos,
+                                char_index: position,
+                                message,
+                            } => {
+                                write!(
+                                    f,
+                                    "Token expected at line {} char_pos {} {}",
+                                    line_pos, position, message
+                                )
+                            }
                 ParserError::InvalidToken {
-                    line_index: line_pos,
-                    char_index: char_pos,
-                    message,
-                } => {
-                    write!(
-                        f,
-                        "Invalid token at line {}  position {} {}",
-                        line_pos, char_pos, message
-                    )
-                }
+                                line_index: line_pos,
+                                char_index: char_pos,
+                                message,
+                            } => {
+                                write!(
+                                    f,
+                                    "Invalid token at line {}  position {} {}",
+                                    line_pos, char_pos, message
+                                )
+                            }
                 ParserError::IOError { error } => {
-                    write!(f, "IO Error {}", error)
-                }
+                                write!(f, "IO Error {}", error)
+                            }
                 ParserError::MissingKey => write!(
-                    f,
-                    "Key value pair is expected. But key is missing, only value is present "
-                ),
+                                f,
+                                "Key value pair is expected. But key is missing, only value is present "
+                            ),
                 ParserError::InvalidPlaceHolderTypeFound {
-                    line_index: line_pos,
-                    char_index: char_pos,
-                    message,
-                } => {
-                    write!(
-                        f,
-                        "Invalid placeholder type found at line {}  position {} {}",
-                        line_pos, char_pos, message
-                    )
-                }
+                                line_index: line_pos,
+                                char_index: char_pos,
+                                message,
+                            } => {
+                                write!(
+                                    f,
+                                    "Invalid placeholder type found at line {}  position {} {}",
+                                    line_pos, char_pos, message
+                                )
+                            }
                 ParserError::MissingData => {
-                    write!(f, "Expected data but found none whle writing to writer",)
-                }
+                                write!(f, "Expected data but found none whle writing to writer",)
+                            }
                 ParserError::MissingValue(key) => write!(
+                                f,
+                                "Expected value for key {} but found none whle writing to writer",
+                                key
+                            ),
+                ParserError::Utf8Error(_key) => write!(
+                                f,
+                                "Expected value is not a valid  utf-8 data",                    
+                            ),
+                ParserError::SerdeError(_key) => write!(
+                                f,
+                                "Expected value is not a valid  utf-8 data",                    
+                            ),
+                ParserError::EndOfStream => write!(
                     f,
-                    "Expected value for key {} but found none whle writing to writer",
-                    key
+                    "End of stream reached while parsing data. Expected more data to be present.",                    
                 ),
             }
         }
@@ -118,9 +135,24 @@ mod core {
 
     #[allow(unused)]
     pub trait ValueExtractor<'a> {
+        fn get_string_value_unchecked(&self) -> Result<String, ParserError>;
+        fn get_signed_num_64_value_unchecked(&self) -> Result<i64, ParserError>;
+        fn get_unsigned_num_64_value_unchecked(&self) -> Result<u64, ParserError>;
+        fn get_unsigned_num_32_value_unchecked(&self) -> Result<u32, ParserError>;
+        fn get_signed_num_16_value_unchecked(&self) -> Result<i16, ParserError>;
+        fn get_unsigned_num_16_value_unchecked(&self) -> Result<u16, ParserError>;
+        fn get_u8_vec_unchecked(&self) -> Result<&Vec<u8>, ParserError>;
+
+        
+
+
         fn get_string_value(&self) -> Option<String>;
         fn get_signed_num_64_value(&self) -> Option<i64>;
         fn get_unsigned_num_64_value(&self) -> Option<u64>;
+        fn get_unsigned_num_32_value(&self) -> Option<u32>;
+
+        fn get_signed_num_16_value(&self) -> Option<i16>;
+        fn get_unsigned_num_16_value(&self) -> Option<u16>;
         //fn get_unsigned_byte_slice(&self) -> Option<&'a [u8]>;
 
         fn get_u8_vec(&self) -> Option<&Vec<u8>>;
@@ -130,6 +162,11 @@ mod core {
         fn get_string_value(&self) -> Option<String> {
             return match &self {
                 ValueType::String(ref data) => Some(data.clone()),
+                ValueType::UnSignedNumber16(ref data) => Some(data.to_string()),
+                ValueType::UnSignedNumber32(ref data) => Some(data.to_string()),
+                ValueType::UnSignedNumber64(ref data) => Some(data.to_string()),
+                ValueType::SignedNumber16(ref data) => Some(data.to_string()),
+                ValueType::SignedNumber64(ref data) => Some(data.to_string()),
 
                 _ => {
                     return None;
@@ -157,6 +194,37 @@ mod core {
             };
         }
 
+        fn get_unsigned_num_32_value(&self) -> Option<u32> {
+            return match self {
+                ValueType::UnSignedNumber32(data) => Some(*data),
+                ValueType::String(data) => Some(data.parse::<u32>().unwrap()),
+
+                _ => {
+                    return None;
+                }
+            };
+        }
+
+        fn get_signed_num_16_value(&self) -> Option<i16> {
+            return match self {
+                ValueType::SignedNumber16(data) => Some(*data),
+
+                _ => {
+                    return None;
+                }
+            };
+        }
+
+        fn get_unsigned_num_16_value(&self) -> Option<u16> {
+            return match self {
+                ValueType::UnSignedNumber16(data) => Some(*data),
+
+                _ => {
+                    return None;
+                }
+            };
+        }
+
         /* fn get_unsigned_byte_slice(&self) -> Option<&'a [u8]> {
             return match self {
                 ValueType::UnSignedByteSlice(data) => Some(*data),
@@ -176,53 +244,108 @@ mod core {
                 }
             };
         }
+        
+        fn get_string_value_unchecked(&self) -> Result<String, ParserError> {
+            match self.get_string_value(){
+                Some(data) => Ok(data),
+                None => Err(ParserError::MissingValue(format!("unable to get String value from {:?}", self)))
+            }
+        }
+        
+        fn get_signed_num_64_value_unchecked(&self) -> Result<i64, ParserError> {
+            match self.get_signed_num_64_value(){
+                Some(data) => Ok(data),
+                None => Err(ParserError::MissingValue(format!("unable to get signed 64 value from {:?}", self)))
+            }
+        }
+        
+        fn get_unsigned_num_64_value_unchecked(&self) -> Result<u64, ParserError> {
+            match self.get_unsigned_num_64_value(){
+                Some(data) => Ok(data),
+                None => Err(ParserError::MissingValue(format!("unable to get unsigned 64 value from {:?}", self)))
+            }
+        }
+
+        fn get_unsigned_num_32_value_unchecked(&self) -> Result<u32, ParserError> {
+            match self.get_unsigned_num_32_value(){
+                Some(data) => Ok(data),
+                None => Err(ParserError::MissingValue(format!("unable to get unsigned 32 value from {:?}", self)))
+            }
+        }
+
+        fn get_signed_num_16_value_unchecked(&self) -> Result<i16, ParserError> {
+            match self.get_signed_num_16_value(){
+                Some(data) => Ok(data),
+                None => Err(ParserError::MissingValue(format!("unable to get signed 64 value from {:?}", self)))
+            }
+        }
+        
+        fn get_unsigned_num_16_value_unchecked(&self) -> Result<u16, ParserError> {
+            match self.get_unsigned_num_16_value(){
+                Some(data) => Ok(data),
+                None => Err(ParserError::MissingValue(format!("unable to get unsigned 64 value from {:?}", self)))
+            }
+        }
+        
+        fn get_u8_vec_unchecked(&self) -> Result<&Vec<u8>, ParserError> {
+            match self.get_u8_vec(){
+                Some(data) => Ok(data),
+                None => Err(ParserError::MissingValue(format!("unable to get vec of bytes value from {:?}", self)))
+            }
+        }
     }
 
     //#[derive(Clone)]
     #[allow(unused)]
+    #[derive(Debug)]
     pub enum ValueType {
         String(String),
         SignedNumber64(i64),
         UnSignedNumber64(u64),
+        UnSignedNumber32(u32),
+        SignedNumber16(i16),
+        UnSignedNumber16(u16),
         //UnSignedByteSlice([u8]),
         U8Vec(Vec<u8>),
-        StreamData(&'static mut protocol_reader::ProtoStream<BufReader<tokio::net::TcpStream>>),
+        //StreamData(&'static mut protocol_reader::ProtoStream<BufReader<tokio::net::TcpStream>>),
         //StreamData1(StreamValueType<ProtoStream<BufReader<TcpStream>>>),
         None,
         //KeyValueCollection(Vec<(String, ValueType)>),
     }
 
     impl ValueType {
+
+        
+        
+
         #[allow(unused)]
         async fn write<W: AsyncWrite + Unpin>(& self, mut writer: W) -> Result<(), ParserError> {
             match self {
                 ValueType::String(s) => {
-                    writer.write(s.as_bytes()).await?;
-                }
+                                writer.write(s.as_bytes()).await?;
+                            }
                 ValueType::SignedNumber64(num) => {
-                    writer.write_i64(*num).await?;
-                }
+                                writer.write_i64(*num).await?;
+                            }
                 ValueType::UnSignedNumber64(num) => {
-                    writer.write_u64(*num).await?;
+                                writer.write_u64(*num).await?;
+                            }
+                ValueType::UnSignedNumber32(num) => {
+                    writer.write_u32(*num).await?;
                 }
                 ValueType::U8Vec(data) => {
-                    writer.write_all(&data[..]).await?;
+                                writer.write_all(&data[..]).await?;
+                            }
+                ValueType::SignedNumber16(num) => {
+                    writer.write_i16(*num).await?;
                 }
-                /* ValueType::StreamData(stream) => loop {
-                    if let Some(data) = StreamExt::next(*stream).await {
-                        match data {
-                            Ok(datum) => {
-                                writer.write_u8(datum).await?;
-                            }
-                            Err(e) => {
-                                return Err(ParserError::IOError { error: e });
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }, */
-                _ => {}
+                ValueType::UnSignedNumber16(num) => {
+                    writer.write_u16(*num).await?;
+                },
+
+                
+
+                ValueType::None => todo!(),
             }
             Ok(())
         }
@@ -241,7 +364,7 @@ mod core {
 
     
 
-    pub trait RequestParse {
+    /* pub trait RequestParse {
         #[allow(unused)]
         async fn parse_request<RI, RequestStream>(
             &self,
@@ -252,7 +375,7 @@ mod core {
             /*H: RequestHandler,*/
             RI: RequestInfo,
             RequestStream: AsyncRead + Unpin;
-    }
+    } */
 
     /* impl RequestParse for Parser {
         async fn parse_request<RI, RequestStream, >(
@@ -296,32 +419,22 @@ mod core {
 
         fn add_info(&mut self, key: String, value: ValueType);
 
+        fn has_all_data(&self) -> bool;
+
     }
 
     pub trait RequestInfo: InfoProvider {
-       /*  #[allow(unused)]
-        fn get_info(&self, key: &String) -> Option<&ValueType>;
-
-        #[allow(unused)]
-        fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType>;
-
-        #[allow(unused)]
-        fn get_keys_by_group_name(&self, name: String) -> Option<Vec<&String>>;
-
-        fn add_info(&mut self, key: String, value: ValueType); */
-    }
-
-    pub trait ResponseInfo: InfoProvider {
         
     }
 
+    pub trait ResponseInfo: InfoProvider {
+    }
+
     #[allow(unused)]
-    pub trait RequestFactory<REQI, REQSER, AR, AW, REQH, REQERRH, RESI> : Send + Sync
+    pub trait RequestFactory<REQI, REQSER, REQH, REQERRH, RESI> : Send + Sync
     where
         REQI: RequestInfo,
-        AR: AsyncRead + Unpin + Send + Sync,
-        AW: AsyncWrite + Unpin + Send + Sync,
-        REQSER: RequestSerializer<REQI, AR, AW>,
+        REQSER: RequestSerializer<REQI>,
         REQH: RequestHandler<REQI, RESI>,
         REQERRH: RequestErrorHandler<REQI, RESI>,
         RESI: ResponseInfo,
@@ -329,24 +442,22 @@ mod core {
         fn get_request_spec(&self) -> &Placeholder;
         fn create_request_info(&self) -> REQI;
         fn create_request_serializer(&self) -> REQSER;
-        fn create_request_handler(&self) -> &REQH;
+        fn create_request_handler(&self) -> REQH;
         fn create_error_request_handler(&self) -> REQERRH;
     }
 
     #[allow(unused)]
-    pub trait ResponseFactory<RESI, RESS, AR, AW, RESH, RESERRH>: Send + Sync
+    pub trait ResponseFactory<RESI, RESS, RESH, RESERRH>: Send + Sync
     where
         RESI: ResponseInfo,
-        AR: AsyncRead + Unpin + Send + Sync,
-        AW: AsyncWrite + Unpin + Send + Sync,
-        RESS: ResponseSerializer<RESI, AR, AW>,
+        RESS: ResponseSerializer<RESI>,
         RESH: ResponseHandler<RESI>,
         RESERRH: ResponseErrorHandler<RESI>,
     {
         fn get_response_spec(&self) -> &Placeholder;
         fn create_response_info(&self) -> RESI;
         fn create_response_serializer(&self) -> RESS;
-        fn create_response_handler(&self) -> &RESH;
+        fn create_response_handler(&self) -> RESH;
         fn create_error_responset_handler(&self) -> RESERRH;
     }
 
@@ -356,7 +467,7 @@ mod core {
         REQI: RequestInfo,
         RESI: ResponseInfo,
     {
-        async fn handle_request(&self, request: &REQI) -> Result<RESI, ParserError>;
+        async fn handle_request(&self, request: &REQI, response: &mut RESI) -> Result<RESI, ParserError>;
     }
 
     pub trait ResponseHandler<RESI> : Send + Sync
@@ -390,61 +501,63 @@ mod core {
 
     #[async_trait]
     pub trait RequestSerializer<
-        REQI: RequestInfo,
-        AR: AsyncRead + Unpin + Send + Sync,
-        AW: AsyncWrite + Unpin + Send + Sync>: Send + Sync
+        REQI: RequestInfo> : Send + Sync
     {
         #[allow(unused)]
-        async fn serialize_to(
+        async fn serialize_to<W>(
             &self,
             req: REQI,
-            writer: AW,
+            writer: W,
             spec: &Placeholder,
-        ) -> Result<(), ParserError>;
+        ) -> Result<(), ParserError>
+        where W: AsyncWrite + Unpin + Send + Sync;
 
-        async fn deserialize_from(
+        async fn deserialize_from<B>(
             &self,
             request_info: REQI,
-            reader: &mut BufReader<&mut AR>,
+            reader: &mut  B,
             spec: &Placeholder,
-        ) -> Result<REQI, ParserError>;        
+        ) -> Result<REQI, ParserError> where B:AsyncRead + Unpin + Send + Sync ;        
     }
 
 
     #[async_trait]
-    pub trait ResponseSerializer<RSI, R, W>: Send + Sync 
+    pub trait ResponseSerializer<RSI>: Send + Sync 
     where RSI: ResponseInfo ,
-        R: AsyncRead + Unpin + Send + Sync,
-        W: AsyncWrite + Unpin + Send + Sync,
+        
     {
-        async fn serialize_to(
+        async fn serialize_to<W>(
             &self,
             req: RSI,
             writer: W,
             spec: &Placeholder,
-        ) -> Result<(), ParserError>;
+        ) -> Result<(), ParserError>
+        where W: AsyncWrite + Unpin + Send + Sync;
 
         #[allow(unused)]
-        async fn deserialize_from(&self,  response_info: &mut RSI,reader: &mut BufReader<&mut R>, spec: &Placeholder) -> Result<(), ParserError>;
+        async fn deserialize_from<R>(&self,  
+            response_info: &mut RSI,
+            reader: &mut BufReader<R>,
+            spec: &Placeholder) -> Result<(), ParserError>
+        where R:AsyncRead + Unpin + Send + Sync;
     }
 
     #[allow(unused)]
-    struct DefaultSerializer;
+    pub struct DefaultSerializer;
 
     #[async_trait]
-    impl<REQI, AR, AW>
-        RequestSerializer<REQI, AR, AW> for DefaultSerializer
+    impl<REQI>
+        RequestSerializer<REQI> for DefaultSerializer
         where 
             REQI: RequestInfo + 'static,
-            AR: AsyncRead + Unpin + Send + Sync + 'static,
-            AW: AsyncWrite + Unpin + Send + Sync + 'static,
     {
-        async fn serialize_to(
+        async fn serialize_to<W>(
             &self,
             request_info: REQI,
-            writer: AW,
+            writer: W,
             spec: &Placeholder,
-        ) -> Result<(), ParserError> {
+        ) -> Result<(), ParserError> 
+        where W: AsyncWrite + Unpin + Send + Sync {
             let mut protocol_writer = ProtocolBuffWriter::new(writer);
             protocol_writer
                 .write_composite(spec, &request_info, None)
@@ -452,34 +565,43 @@ mod core {
             Ok(())
         }
 
-        async fn deserialize_from(
+        async fn deserialize_from< B>(
             &self,
             mut request_info:  REQI,
-            reader: &mut BufReader<&mut AR>,
+            reader: &mut B,
             spec: &Placeholder,
-        ) -> Result<REQI, ParserError> {
-            let mut protocol_reader = ProtocolBuffReader::new(reader, 1024);
-            protocol_reader
-                .parse_composite(&mut request_info, spec).await?;
-                
+        )  -> Result<REQI, ParserError> 
+        where B:AsyncRead + Unpin + Send + Sync {
+            let mut protocol_reader = ProtocolBuffReader::new( BufReader::new(reader), 1024);
+            let result = protocol_reader
+            .parse_composite(&mut request_info, spec).await;
+            
+            if let Err(parser_error) = result{
+                if let ParserError::EndOfStream = parser_error  {
+                    if request_info.has_all_data() {
+                        return Ok(request_info);
+                    }
+                    return Err(ParserError::EndOfStream);
+                } else {
+                    return Err(parser_error);
+                }
+            }
             Ok(request_info)
         }        
     }
 
     #[async_trait]
-    impl<RESI, AR, AW>
-        ResponseSerializer<RESI, AR, AW> for DefaultSerializer
+    impl<RESI>
+        ResponseSerializer<RESI> for DefaultSerializer
         where 
             RESI: ResponseInfo + 'static,
-            AR: AsyncRead + Unpin + Send + Sync + 'static,
-            AW: AsyncWrite + Unpin + Send + Sync + 'static,
     {
-        async fn serialize_to(
+        async fn serialize_to<W>(
             &self,
             response_info: RESI,
-            writer: AW,
+            writer: W,
             spec: &Placeholder,
-        ) -> Result<(), ParserError> {
+        ) -> Result<(), ParserError> where W: AsyncWrite + Unpin + Send + Sync {
             let mut protocol_writer = ProtocolBuffWriter::new(writer);
             protocol_writer
                 .write_composite(spec, &response_info, None)
@@ -490,12 +612,13 @@ mod core {
         //(&self, mut response_info: RSI,reader: R, spec: &Placeholder)
         //async fn deserialize_from(&self,  response_info: &mut RSI,reader: &mut BufReader<&mut R>, spec: &Placeholder) -> Result<RSI, ParserError>;
 
-        async fn deserialize_from(
+        async fn deserialize_from<R>(
             &self,
             response_info:&mut RESI,
-            reader: &mut BufReader<&mut AR>,
+            reader: &mut BufReader< R>,
             spec: &Placeholder,
-        ) -> Result<(), ParserError> {
+        ) -> Result<(), ParserError> 
+        where R:AsyncRead + Unpin + Send + Sync {
             let mut protocol_reader = ProtocolBuffReader::new(reader, 1024);
             protocol_reader
                 .parse_composite(response_info, spec).await?;
@@ -539,6 +662,7 @@ mod core {
         response_info: Option<RSI>,
     }
 
+    #[derive(Debug,)]
     #[allow(unused)]
     pub enum ServerError {
         StartError(String),
@@ -547,7 +671,7 @@ mod core {
         ResponseError(ParserError),
         IOError(std::io::Error),
     }
-
+    #[async_trait]
     pub trait Server {
         #[allow(unused)]
         async fn start(&'static mut self) -> Result<(), ServerError>;
@@ -565,42 +689,50 @@ mod core {
         }
     }
 
-    pub trait ProtocolConfig<R, W>: Send + Sync
-    where
-        R: AsyncRead + Unpin + Send + Sync,
-        W: AsyncWrite + Unpin + Send + Sync,
+    pub trait ProtocolConfig: Send + Sync
     {
-        type REQF: RequestFactory<Self::REQI, Self::REQSER, R, W, Self::REQH, Self::REQERRH, Self::RESI>;
-        type RESF: ResponseFactory<Self::RESI, Self::RESSER, R, W, Self::RESH, Self::RESERRH>;
+        /* type R: AsyncRead + Unpin + Send + Sync;
+        type W: AsyncWrite + Unpin + Send + Sync; */
+        type REQF: RequestFactory<Self::REQI, Self::REQSER, Self::REQH, Self::REQERRH, Self::RESI>;
+        type RESF: ResponseFactory<Self::RESI, Self::RESSER, Self::RESH, Self::RESERRH>;
         type REQI: RequestInfo;
         type RESI: ResponseInfo;
-        type REQSER: RequestSerializer<Self::REQI, R, W>;
-        type RESSER: ResponseSerializer<Self::RESI, R, W>;
+        type REQSER: RequestSerializer<Self::REQI>;
+        type RESSER: ResponseSerializer<Self::RESI>;
 
         type REQH: RequestHandler<Self::REQI, Self::RESI>;
         type RESH: ResponseHandler<Self::RESI>;
         type REQERRH: RequestErrorHandler<Self::REQI, Self::RESI>;
         type RESERRH: ResponseErrorHandler<Self::RESI>;
     }
-
-    struct ServerInstance<CFG: ProtocolConfig<TcpStream, TcpStream>> {
+    
+    #[derive(Builder)]
+    #[builder(pattern = "owned")]
+    pub struct ServerInstance<CFG> 
+    where CFG: ProtocolConfig{
         hosts: Vec<String>,
 
-        #[allow(unused)]
-        protocol: Protocol,
+        /* #[allow(unused)]
+        protocol: Protocol, */
+
         request_factory: CFG::REQF,
         #[allow(unused)]
         response_factory: CFG::RESF,
+
+        #[builder(setter(skip))]
         listeners: Vec<TcpListener>,
 
-        phantom_req_info: std::marker::PhantomData<CFG::REQF>,
-        phantom_res_info: std::marker::PhantomData<CFG::RESF>,
+       // phantom_req_info: std::marker::PhantomData<CFG::REQF>,
+       // phantom_res_info: std::marker::PhantomData<CFG::RESF>,
     }
 
-    #[allow(unused)]
-    fn is_send<T: Send>(s: T) {}
+    
 
-    impl<CFG: ProtocolConfig<TcpStream, TcpStream>> ServerInstance<CFG> {
+    
+    impl <CFG> ServerInstance<CFG> 
+    where CFG: ProtocolConfig,
+                 
+    {
         #[allow(unused)]
         async fn create_listeners(&mut self) -> Result<(), ServerError> {
             for host in &self.hosts {
@@ -623,7 +755,6 @@ mod core {
         }
 
         async fn accept_connections(&'static self, tcp_listener: &'static TcpListener) {
-            //let spec = self.request_factory.get_request_spec();
             tokio::spawn(async move {
                 loop {
                     let (socket, addr) = tcp_listener.accept().await.unwrap();
@@ -631,15 +762,7 @@ mod core {
 
                     let _handle = tokio::spawn(async move {
                         self.handle_connection(socket).await;
-                        //let mut req_info = self.request_factory.create_request_info();
-                        //let serializer = self.request_factory.create_request_serializer();
-                        //is_send(serializer);
-                        //let f = serializer.deserialize_from1().await;
-                        //is_send(f);
                     });
-
-                    // Handle the connection
-                    // ...
                 }
             });
         }
@@ -647,9 +770,16 @@ mod core {
         async fn handle_connection(&'static self, mut socket: TcpStream) {
             let req_info = self.request_factory.create_request_info();
             let serializer = self.request_factory.create_request_serializer();
-            let mut buf_reader = BufReader::new(&mut socket);
+
+            let mut res_info = self.response_factory.create_response_info();
+            //let read = Box::new(&mut socket);
+            //let read = & mut socket;
+            
+           // let x = *read;
+            let mut buf_reader  = BufReader::new(&mut socket);  
             //serializer.serialize_to(req_info, socket, self.request_factory.get_request_spec(),).await;
-             let request_info = serializer
+             let request_info = 
+             serializer
                 .deserialize_from(
                     req_info,
                     &mut buf_reader,
@@ -658,8 +788,9 @@ mod core {
                 .await
                 .unwrap(); 
             let result = CFG::REQH::handle_request(
-                self.request_factory.create_request_handler(),
+                &self.request_factory.create_request_handler(),
                 &request_info,
+                &mut res_info
             ).await;
             match result {
                 Ok(response_info) => {
@@ -680,13 +811,16 @@ mod core {
         }
     }
 
-    impl<CFG: ProtocolConfig<TcpStream, TcpStream>> Server for ServerInstance<CFG> {
+    #[async_trait]
+    impl<CFG> Server for ServerInstance<CFG> 
+    where CFG: ProtocolConfig{
         async fn start(&'static mut self) -> Result<(), ServerError> {
             //let host = String::new();
             self.create_listeners().await?;
+            
             for listener in &self.listeners {
                 let _result = self.accept_connections(listener).await;
-                //println!("{:?}", listener);
+                println!("hh{:?}", listener);
             }
 
             Ok(())
@@ -742,6 +876,11 @@ mod core {
 
     pub struct Response {}
 
+    pub enum HeaderValue{
+        String,
+        
+    }
+
     #[derive(Default)]
     #[allow(unused)]
     pub enum PlaceHolderType {
@@ -749,7 +888,9 @@ mod core {
         AnyString,
         ExactString(String),
         OneOf(Vec<String>),
+        BytesOfSizeFromHeader(String),
         Bytes,
+        BytesOfSizeN(u32),
         Space,
         NewLine,
         Delimiter(String),
@@ -864,26 +1005,30 @@ mod core {
         pub fn parse(place_holder_type: &PlaceHolderType, value: &[u8]) -> ValueType {
             match place_holder_type {
                 PlaceHolderType::AnyString => {
-                    ValueType::String(String::from_utf8(value.to_vec()).unwrap())
-                }
+                                            ValueType::String(String::from_utf8(value.to_vec()).unwrap())
+                                        }
                 PlaceHolderType::ExactString(input) => {
-                    ValueType::String(String::from_utf8(value.to_vec()).unwrap())
-                    //todo!("Implement ExactString")
-                }
+                                            ValueType::String(String::from_utf8(value.to_vec()).unwrap())
+                                            //todo!("Implement ExactString")
+                                        }
                 PlaceHolderType::OneOf(_) => {
-                    ValueType::String(String::from_utf8(value.to_vec()).unwrap())
-                }
+                                            ValueType::String(String::from_utf8(value.to_vec()).unwrap())
+                                        }
                 PlaceHolderType::Delimiter(_) => {
-                    ValueType::String(String::from_utf8(value.to_vec()).unwrap())
-                }
-                PlaceHolderType::Bytes => ValueType::U8Vec(value.to_vec()),
+                                            ValueType::String(String::from_utf8(value.to_vec()).unwrap())
+                                        }
                 PlaceHolderType::Space => ValueType::String(" ".to_string()),
-                PlaceHolderType::NewLine => ValueType::String("\n".to_string()),
+                PlaceHolderType::NewLine => ValueType::String("\r\n".to_string()),
                 PlaceHolderType::Composite => todo!(),
                 PlaceHolderType::RepeatMany => todo!(),
                 PlaceHolderType::RepeatN(_) => todo!(),
                 OneOf(items) => todo!(),
                 PlaceHolderType::StreamValue(data) => todo!(),
+                PlaceHolderType::BytesOfSizeFromHeader(_) => ValueType::U8Vec(value.to_vec()),
+                PlaceHolderType::BytesOfSizeN(_) => ValueType::U8Vec(value.to_vec()),
+                PlaceHolderType::Bytes => {
+                    ValueType::U8Vec(value.to_vec())                
+                },
             }
         }
     }
@@ -972,7 +1117,8 @@ mod core {
             optional: bool,
         ) -> &mut Self;
 
-        fn expect_bytes(&mut self, identifier: PlaceHolderIdentifier) -> &mut Self;
+        fn expect_bytes_of_size(&mut self, id: PlaceHolderIdentifier, size:u32, optional: bool) -> &mut Self;
+        fn expect_bytes_of_size_from_header(&mut self, id: PlaceHolderIdentifier, header:String, optional: bool) -> &mut Self;
 
         fn expect_one_of_string(
             &mut self,
@@ -1010,15 +1156,14 @@ mod core {
     {
         match placeholder.place_holder_type {
             PlaceHolderType::AnyString => {
-                /*let buffer = buf_reader.buffer();
+                        /*let buffer = buf_reader.buffer();
                 if(buffer.len() == 0){
                     let p = buf_reader.poll_fill_buf();
                     buf_reader.consume()
                 }*/
-            }
+                    }
             PlaceHolderType::ExactString(input) => {}
             OneOf(_) => {}
-            PlaceHolderType::Bytes => {}
             PlaceHolderType::Space => {}
             PlaceHolderType::NewLine => {}
             PlaceHolderType::Delimiter(_) => {}
@@ -1026,6 +1171,9 @@ mod core {
             PlaceHolderType::RepeatMany => {}
             PlaceHolderType::RepeatN(_) => {}
             PlaceHolderType::StreamValue(name) => todo!(),
+            PlaceHolderType::BytesOfSizeFromHeader(_) => todo!(),
+            PlaceHolderType::BytesOfSizeN(_) => todo!(),
+            PlaceHolderType::Bytes => todo!(),
         }
     }
 
@@ -1167,12 +1315,6 @@ mod core {
             return self;
         }
 
-        fn expect_bytes(&mut self, id: PlaceHolderIdentifier) -> &mut Self {
-            self.0
-                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::Bytes, false));
-            return self;
-        }
-
         fn expect_stream(
             &mut self,
             id: PlaceHolderIdentifier,
@@ -1215,6 +1357,18 @@ mod core {
 
         fn build(&mut self) -> Placeholder {
             return mem::take(&mut self.0);
+        }
+
+        fn expect_bytes_of_size(&mut self, id: PlaceHolderIdentifier, size:u32, optional: bool) -> &mut Self {
+            self.0
+                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::BytesOfSizeN(size), optional));
+            return self;
+        }
+        
+        fn expect_bytes_of_size_from_header(&mut self, id: PlaceHolderIdentifier, header:String, optional:bool) -> &mut Self {
+            self.0
+                .add_place_holder(Placeholder::new(id, None, PlaceHolderType::BytesOfSizeFromHeader(header), optional));
+            return self;
         }
     }
 
@@ -1343,15 +1497,14 @@ mod core {
         {
             match placeholder.place_holder_type {
                 PlaceHolderType::AnyString => {
-                    /*let buffer = buf_reader.buffer();
+                                /*let buffer = buf_reader.buffer();
                     if(buffer.len() == 0){
                         let p = buf_reader.poll_fill_buf();
                         buf_reader.consume()
                     }*/
-                }
+                            }
                 PlaceHolderType::ExactString(input) => {}
                 OneOf(_) => {}
-                PlaceHolderType::Bytes => {}
                 PlaceHolderType::Space => {}
                 PlaceHolderType::NewLine => {}
                 PlaceHolderType::Delimiter(_) => {}
@@ -1359,6 +1512,9 @@ mod core {
                 PlaceHolderType::RepeatMany => {}
                 PlaceHolderType::RepeatN(_) => {}
                 PlaceHolderType::StreamValue(name) => todo!(),
+                PlaceHolderType::BytesOfSizeFromHeader(_) => todo!(),
+                PlaceHolderType::BytesOfSizeN(_) => todo!(),
+                PlaceHolderType::Bytes => todo!(),
             }
         }
     }
@@ -1367,7 +1523,7 @@ mod core {
     mod protocol_writer;
 }
 
-mod http;
+pub mod http;
 mod utils;
 
 #[cfg(test)]
@@ -1446,6 +1602,10 @@ mod test_utils {
             } else {
                 None
             }
+        }
+        
+        fn has_all_data(&self) -> bool {
+            todo!()
         }
     }
 }

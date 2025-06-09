@@ -87,11 +87,13 @@ where
                             Box::pin(self.write_composite(constituent, request_info, key,))
                                 .await?;
                         }
+
                         #[allow(unused)]
                         PlaceHolderType::RepeatN(n) => {
                             Box::pin(self.write_composite(constituent, request_info, None,))
                                 .await?;
                         }
+
                         PlaceHolderType::RepeatMany => {                            
                             let header_name = match &constituent.name {
                                 crate::core::PlaceHolderIdentifier::Name(name) => {
@@ -106,14 +108,14 @@ where
                                 {
                                     for key in &keys {
                                         key_option = Some(key);
-                                    
+                
                                         Box::pin(self.write_composite(
                                             constituent,
                                             request_info,
                                             key_option,                                                
                                         ))
                                         .await?;
-                                        
+                    
                                     }
                                 }
                             }
@@ -128,13 +130,24 @@ where
                         PlaceHolderType::StreamValue(name) => {
                             self.prepare_and_write_data(request_info, key, constituent, Some(name)).await?;
                         }
+
                         #[allow(unused)]
                         PlaceHolderType::OneOf(items) => {
                             self.prepare_and_write_data(request_info, key, constituent, None).await?;
                         }
-                        PlaceHolderType::Bytes => {
+
+                        PlaceHolderType::BytesOfSizeFromHeader(header) => {
                             self.prepare_and_write_data(request_info, key, constituent, None).await?;
                         }
+
+                        PlaceHolderType::BytesOfSizeN(_) => {
+                            self.prepare_and_write_data(request_info, key, constituent, None).await?;
+                        },
+
+                        PlaceHolderType::Bytes => {
+                            self.prepare_and_write_data(request_info, key, constituent, None).await?;
+                        },
+
                         PlaceHolderType::Space => {
                             self.inner.write(b" ").await?;
                         },
@@ -144,7 +157,7 @@ where
                         PlaceHolderType::Delimiter(delim) => {
                             self.inner.write(delim.as_bytes()).await?;
                         }
-                    }
+                    }       
                     i += 1;
                 }
             }
@@ -208,8 +221,10 @@ where
                     if let Some(value) = value {
                         value.write(&mut self.inner).await?;
                         return Ok(());
-                    } else {
+                    } else if !constituent.optional {
                         return Err(ParserError::MissingValue(data.unwrap().to_owned()));
+                    }else {
+                        return Ok(());
                     }
                 }else{
                     self.inner.write(overriding_data.unwrap().as_bytes()).await?;
@@ -275,6 +290,10 @@ mod tests {
                 None
             }
         }
+        
+        fn has_all_data(&self) -> bool {
+            todo!()
+        }
     }
 
     
@@ -317,7 +336,8 @@ mod tests {
         spec_builder.expect_repeat_many(header_place_holder, "headers".to_owned());
         //spec_builder.expect_exact_string(InlineKeyWithValue("data".to_string()), "test123".to_string(), false);
         spec_builder.expect_newline();
-        spec_builder.expect_bytes(InlineKeyWithValue("body".to_string()));
+        spec_builder.expect_bytes_of_size_from_header(InlineKeyWithValue("body".to_string()), 
+            "Content-Length".to_string(), true);
 
         let placehoder = spec_builder.build();
     
