@@ -1,15 +1,14 @@
+use async_trait::async_trait;
 use memchr::memmem::Finder;
 use pin_project::pin_project;
 use std::{
-     fmt::Display, future::Future, io::{self}, pin::Pin, task::{Context, Poll}, time::Duration
+     fmt::{Display}, future::Future, io::{self}, pin::Pin, task::{Context, Poll}, time::Duration
 };
-use tokio::{io::{AsyncBufRead, AsyncRead, ReadBuf}, time::timeout};
+use tokio::{io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, ReadBuf}, time::timeout};
 use tokio_stream::Stream;
 
 use crate::core::{
-    ParserError,
-    PlaceHolderIdentifier::{InlineKeyWithValue, Key, Value},
-    PlaceHolderType, PlaceHolderValue, Placeholder, ValueType,
+    Parse, ParserError, PlaceHolderIdentifier::{InlineKeyWithValue, Key}, PlaceHolderType, PlaceHolderValue,  Protocol, SpecMetaData, SpecRead, Value, ValueType
 };
 
 use super::{InfoProvider, ValueExtractor};
@@ -52,9 +51,32 @@ impl <R> Future for StreamIterator<R> where  R: AsyncBufRead + Unpin {
     }
 } */
 
+
+/* 
+
+impl <R> ConsumingRead for ProtocolBuffReader<R>
+where
+    R: AsyncBufRead + Send + Sync + Unpin,
+{
+    fn consume(&mut self, amount: usize) {
+        /*  if self.pos + amount > self.cap {
+             self.buf.clear();
+             self.pos = 0;
+         } */
+         if self.pos >= self.buf.len() / 2 && !&self.has_markers() {
+             self.buf.drain(0..self.pos + amount);
+             self.pos = 0;
+         } else {
+             self.pos += amount;
+         }
+    }
+} */
+
+//fn parse(parse: Parse)
+
 impl<R> Stream for ProtoStream<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     type Item = io::Result<u8>;
 
@@ -65,7 +87,7 @@ where
             self.buff_reader.consume(1);
             return Poll::Ready(Some(Ok(value)));
         } else {
-            match self.buff_reader.fill_buf(cx) {
+            match self.buff_reader.fill_buffer(cx) {
                 Poll::Ready(Ok(len)) => {
                     if len == 0 {
                         return Poll::Ready(None);
@@ -85,48 +107,68 @@ where
     }
 }
 
-trait PlaceHolderRead {
+#[async_trait]
+pub trait PlaceHolderRead {
     #[allow(unused)]
-    async fn read_placeholder_as_string<'a, 'b>(
-        self: &'a mut Self,
-        placeholder: &'b Placeholder,
+    async fn read_placeholder_as_string(
+        self: & mut Self,
         input: String,
-     
-    ) -> Result<Option<ValueType>, ParserError>
-    where
-        'a: 'b;
+        spec_metadata: &SpecMetaData,
+    ) -> Result<Option<Vec<u8>>, ParserError>;
 
     #[allow(unused)]
-    async fn read_placeholder_until<'a, 'b, IP: InfoProvider>(
-        self: &'a mut Self,
-        placeholder: &'b Placeholder,
-        delimiter: String,
-        info_provider: &IP,        
-    ) -> Result<Option<ValueType>, ParserError>
-    where
-        'a: 'b;
+    async fn read_placeholder_until(
+        self: &mut Self,        
+        delimiter: String,        
+        spec_metadata: &SpecMetaData,
+    ) -> Result<Option<Vec<u8>>, ParserError>;
 
 
     #[allow(unused)]
-    async fn read_bytes<'a, 'b>(
-        self: &'a mut Self,
-        placeholder: &'b Placeholder,
+    async fn read_bytes(
+        self: & mut Self,        
         size: ReadBytesSize,
-    ) -> Result<Option<ValueType>, ParserError>
-    where
-        'a: 'b;
+        spec_metadata: &SpecMetaData,
+    ) -> Result<Option<Vec<u8>>, ParserError>;
 }
+
+
+pub trait MarkAndRead:AsyncBufRead + Unpin + Send + Sync {
+    fn mark(&mut self) -> Marker;
+    fn reset(&mut self, mark: &Marker) -> Result<(), ParserError>;
+    fn unmark(&mut self, mark: &Marker) -> Result<(), ParserError>;
+    fn is_valid_marker(&self, marker: &Marker) -> Result<(), ParserError>;
+    fn has_markers(&self) -> bool;
+}
+
+
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct Marker{
+    pos:usize,
+}
+
+impl Marker {
+    fn new(pos: usize) -> Self {
+        Marker { pos }
+    }
+}
+
+
+
+
 
 #[pin_project]
 pub(super) struct ProtocolBuffReader<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     #[pin]
     inner: R,
     cap: usize,
     pos: usize,
     buf: Vec<u8>,
+    markers: Vec<Marker>,
     marked_pos: usize,
     marked: bool,
     line_index: usize,
@@ -134,16 +176,23 @@ where
     char_index_in_line: usize,
 }
 
+impl <R> SpecRead for ProtocolBuffReader<R>
+where
+    R: AsyncBufRead + Send + Sync + Unpin,
+{
+    
+}
+
 pub struct ProtoStream<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     buff_reader: ProtocolBuffReader<R>,
 }
 
 impl<R> From<ProtocolBuffReader<R>> for ProtoStream<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn from(buff_reader: ProtocolBuffReader<R>) -> Self {
         ProtoStream { buff_reader }
@@ -152,7 +201,7 @@ where
 
 impl<R> ProtoStream<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync +  Unpin,
 {
     #[allow(unused)]
     fn new(buff_reader: ProtocolBuffReader<R>) -> Self {
@@ -167,7 +216,7 @@ where
 
 impl<R> From<ProtoStream<R>> for ProtocolBuffReader<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn from(value: ProtoStream<R>) -> Self {
         value.buff_reader
@@ -176,7 +225,7 @@ where
 
 impl<R> AsyncRead for ProtocolBuffReader<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -189,15 +238,54 @@ where
     }
 }
 
+impl <B> MarkAndRead for ProtocolBuffReader<B> 
+    where B: AsyncBufRead +  Send+ Sync + Unpin, {
+
+    fn is_valid_marker(&self, marker: &Marker) -> Result<(), ParserError> {
+        if self.markers.is_empty() || marker.pos != self.markers.last().unwrap().pos {
+            return Err(ParserError::InvalidMarker {
+                line_index: self.line_index,
+                char_index: self.char_index_in_line + 1,
+                message: "Invalid marker received during reset/unmark operation".to_string(),
+            });
+        }
+        Ok(())
+    }
+    fn mark(&mut self) -> Marker {
+        let marker = Marker::new(self.pos);
+        self.markers.push(marker);
+        *self.markers.last().unwrap()
+    }
+
+    fn reset(&mut self, marker: &Marker) -> Result<(), ParserError> {
+        self.is_valid_marker(marker)?;
+        let marker = self.markers.pop().unwrap();
+        self.pos = marker.pos;        
+        Ok(())
+    }
+
+    fn unmark(&mut self, marker: &Marker) -> Result<(), ParserError> {
+        self.is_valid_marker(marker)?;        
+        self.markers.pop().unwrap();            
+        Ok(())
+    }
+    
+    fn has_markers(&self) -> bool {
+        self.markers.len() > 0
+    }
+}
+
+
+
 impl<R> AsyncBufRead for ProtocolBuffReader<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         //let mut pinned_self = self.project();
         let me = self.get_mut();
         //let  pinned_reader = Pin::new(&mut pinned_self.inner);
-        match me.fill_buf(cx) {
+        match me.fill_buffer(cx) {
             Poll::Ready(Ok(_len)) => {
                 let data = &((me).buf[me.pos..]);
                 Poll::Ready(Ok(data))
@@ -212,11 +300,15 @@ where
         let pinned_reader = Pin::new(&mut pinned_self.inner);
         pinned_reader.consume(amt);
     }
+
 }
 
-impl<R> ProtocolBuffReader<R>
-where
-    R: AsyncBufRead + Unpin,
+
+
+
+
+impl <R>ProtocolBuffReader<R>
+    where R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn mark(&mut self) {
         self.marked_pos = self.pos;
@@ -232,20 +324,7 @@ where
         self.marked = false;
     }
 
-    fn consume(&mut self, amount: usize) {
-       /*  if self.pos + amount > self.cap {
-            self.buf.clear();
-            self.pos = 0;
-        } */
-        if self.pos >= self.buf.len() / 2 && !self.marked {
-            self.buf.drain(0..self.pos + amount);
-            self.pos = 0;
-        } else {
-            self.pos += amount;
-        }
-    }
-
-    fn fill_buf(self: &mut Self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+    fn fill_buffer(self: &mut Self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         //let mut pinned_self = self.project();
         let pinned_reader = Pin::new(&mut self.inner);
         let result = pinned_reader.poll_fill_buf(cx);
@@ -283,6 +362,7 @@ where
             pos: 0,
             buf: Vec::with_capacity(cap),
             marked_pos: 0,
+            markers: Vec::new(),
             marked: false,
             line_index: 0,
             char_index: 0,
@@ -339,7 +419,7 @@ where
 }
 
 
-enum ReadBytesSize{
+pub enum ReadBytesSize{
     Fixed(u32),
     Full,
 }
@@ -370,49 +450,49 @@ impl Display for ReadBytesSize {
 #[pin_project]
 struct ReadBytes<'a, R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     protocol_reader: &'a mut ProtocolBuffReader<R>,
-    placeholder: &'a Placeholder,
     size: ReadBytesSize,
+    
     
 }
 
 impl <'a, R> ReadBytes<'a, R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn new(
         protocol_reader: &'a mut ProtocolBuffReader<R>,
-        placeholder: &'a Placeholder,
+        
         size: ReadBytesSize,
     ) -> Self {
         ReadBytes {
             protocol_reader,
-            placeholder,
+        
             size,
         }
     }
 }
 
-impl<'a, R> Future for ReadBytes<'a, R>
+impl<'a, R> Future for ReadBytes<'a,  R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
-    type Output = Result<Option<ValueType>, ParserError>;
+    type Output = Result<Option<Vec<u8>>, ParserError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut this = self.project();
 
-        let placeholder = this.placeholder;
+        //let placeholder = this.placeholder;
         let read_bytes_expected_size = this.size;
         let protocol_reader = &mut this.protocol_reader;
         
-        protocol_reader.mark_if_optional(placeholder);
+        //protocol_reader.mark_if_optional(placeholder);
         loop {
             let buf = protocol_reader.get_buffer();
             if buf.len() == 0 || !protocol_reader.buf_has_enough_data(read_bytes_expected_size) {
-                let result = protocol_reader.fill_buf(cx);
+                let result = protocol_reader.fill_buffer(cx);
                 match result {
                     Poll::Ready(Ok(read_length)) => {
                         if read_length > 0 {
@@ -420,16 +500,16 @@ where
                         } else {
                             if let ReadBytesSize::Fixed(size) = read_bytes_expected_size {
                                 
-                                protocol_reader.unmark_if_optional(placeholder);
-                                if placeholder.optional {
+                                //protocol_reader.unmark_if_optional(placeholder);
+                                //if placeholder.optional {
                                     return Poll::Ready(Ok(None));
-                                }else{
+                                /* }else{
                                     return Poll::Ready(Err(ParserError::TokenExpected {
                                         line_index: protocol_reader.line_index,
                                         char_index: protocol_reader.char_index_in_line,
                                         message: format!("Expected bytes of size {} not found, EOF reached",size),
                                     }));
-                                }
+                                } */
 
                             }
                             
@@ -451,12 +531,7 @@ where
             if let ReadBytesSize::Fixed(size) = read_bytes_expected_size {
                 let size = *size as usize;
                 if pos + size -1 < buf.len() {
-                    return Poll::Ready(Ok(Some(
-                        PlaceHolderValue::parse(
-                            &placeholder.place_holder_type,
-                            &buf[pos..pos + size],
-                        )
-                    )));
+                    return Poll::Ready(Ok(Some(buf[pos..pos + size].to_vec())));
                 } else {
                     return Poll::Ready(Err(ParserError::TokenExpected {
                         line_index: protocol_reader.line_index,
@@ -467,102 +542,88 @@ where
 
             }else {
                 return Poll::Ready(Ok(Some(
-                    PlaceHolderValue::parse(
-                        &placeholder.place_holder_type,
-                        &buf[pos..buf.len()],
-                    )
-                )));
+                        buf[pos..buf.len()].to_vec())
+                ));
             }            
         }
     }
 }
 
 #[pin_project]
-struct ReadPlaceHolderUntil<'a, R, IP>
+struct ReadPlaceHolderUntil<'a, R>
 where
-    R: AsyncBufRead + Unpin,
-    IP:InfoProvider,
+    R: AsyncBufRead + Send + Sync + Unpin,    
 {
     protocol_reader: &'a mut ProtocolBuffReader<R>,
-    placeholder: &'a Placeholder,
-    delimiter: String,
-    info_provider: &'a IP,
+    //placeholder: &'a Placeholder,
+    delimiter: String,    
 }
 
 #[pin_project]
 struct ReadString<'a, R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     protocol_reader: &'a mut ProtocolBuffReader<R>,
-    placeholder: &'a Placeholder,
     input: String,
 }
 
-impl<'a, R, IP> ReadPlaceHolderUntil<'a, R, IP>
-where
-    R: AsyncBufRead + Unpin,
-    IP: InfoProvider,
+impl <'a, R> ReadPlaceHolderUntil<'a, R> where
+R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn new(
         protocol_reader: &'a mut ProtocolBuffReader<R>,
-        placeholder: &'a Placeholder,
-        delimiter: String,
-        info_provider: &'a IP,
+        delimiter: String,        
     ) -> Self {
         ReadPlaceHolderUntil {
             protocol_reader,
-            placeholder,
-            delimiter,
-            info_provider,
+            delimiter,            
         }
     }
 }
 
-impl<'a, R, IP> Future for ReadPlaceHolderUntil<'a, R, IP>
+impl<'a, R> Future for ReadPlaceHolderUntil<'a, R >
 where
-    R: AsyncBufRead + Unpin,
-    IP: InfoProvider,
-{
-    type Output = Result<Option<ValueType>, ParserError>;
+    R: AsyncBufRead + Send + Sync + Unpin,{
+    type Output = Result<Option<Vec<u8>>, ParserError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut this = self.project();
-        let placeholder = this.placeholder;
+        //let placeholder = this.placeholder;
         let delimiter = this.delimiter;
         let protocol_reader = &mut this.protocol_reader;
         //if protocol_reader.pos < (protocol_reader.cap - 1) {
-            protocol_reader.mark_if_optional(placeholder);
+            //protocol_reader.mark_if_optional(placeholder);
             //let pinned_reader = Pin::new(&mut protocol_reader.inner);
-            if let Some(value) = perform_search(cx, placeholder, delimiter, protocol_reader) {
+            if let Some(value) = perform_search(cx, delimiter, protocol_reader) {
                 match value {
                     Poll::Ready(result) => match result {
                         Ok(index) => {
                             let matched_portion =
                                 &protocol_reader.get_buffer()[protocol_reader.pos..index];
-                            let place_holder_value = PlaceHolderValue::parse(
+                            /* let place_holder_value = PlaceHolderValue::parse(
                                 &placeholder.place_holder_type,
                                 matched_portion,
-                            );
+                            ); */
 
-                            protocol_reader.consume(matched_portion.len() + delimiter.len());
-                            protocol_reader.unmark_if_optional(placeholder);
-                            return Poll::Ready(Ok(Some(place_holder_value)));
+                            //protocol_reader.consume(matched_portion.len() + delimiter.len());
+                            //protocol_reader.unmark_if_optional(placeholder);
+                            return Poll::Ready(Ok(Some(matched_portion.to_vec())));
                         }
                         Err(e) => {
-                            protocol_reader.reset_if_optional(placeholder);
-                            if placeholder.optional {
+                            //protocol_reader.reset_if_optional(placeholder);
+                            /* if placeholder.optional {
                                 return Poll::Ready(Ok(None));
-                            } else {
+                            } else { */
                                 return Poll::Ready(Err(e));
-                            }
+                            /* } */
                         }
                     },
                     Poll::Pending => { 
-                        if this.info_provider.has_all_data() {
+                        /* if this.info_provider.has_all_data() {
                             protocol_reader.unmark_if_optional(placeholder);
                             return Poll::Ready(Err(ParserError::EndOfStream));
-                        }
+                        } */
                         return Poll::Pending;
                     }
                 }
@@ -576,16 +637,16 @@ where
 
 impl<'a, R> ReadString<'a, R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     fn new(
         protocol_reader: &'a mut ProtocolBuffReader<R>,
-        placeholder: &'a Placeholder,
+        
         input: String,
     ) -> Self {
         ReadString {
             protocol_reader,
-            placeholder,
+        
             input,
         }
     }
@@ -593,41 +654,41 @@ where
 
 impl<'a, R> Future for ReadString<'a, R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
-    type Output = Result<Option<ValueType>, ParserError>;
+    type Output = Result<Option<Vec<u8>>, ParserError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut this = self.project();
 
-        let placeholder = this.placeholder;
+        //let placeholder = this.placeholder;
         let input = this.input;
         let protocol_reader = &mut this.protocol_reader;
         //if !protocol_reader.buf_has_enough_data(input.len()) {
         //let pinned_reader = Pin::new(&mut protocol_reader.inner);
-        protocol_reader.mark_if_optional(placeholder);
-        if let Some(value) = read_string(cx, placeholder, input, protocol_reader) {
+        //protocol_reader.mark_if_optional(placeholder);
+        if let Some(value) = read_string(cx, input, protocol_reader) {
             match value {
                 Poll::Ready(result) => match result {
                     Ok(index) => {
                         let matched_portion =
                             &protocol_reader.get_buffer()[index..index + input.len()];
-                        let place_holder_value = PlaceHolderValue::parse(
+                        /* let place_holder_value = PlaceHolderValue::parse(
                             &placeholder.place_holder_type,
                             matched_portion,
                         );
 
                         protocol_reader.consume(input.len());
-                        protocol_reader.unmark_if_optional(placeholder);
-                        return Poll::Ready(Ok(Some(place_holder_value)));
+                        protocol_reader.unmark_if_optional(placeholder); */
+                        return Poll::Ready(Ok(Some(matched_portion.to_vec())));
                     }
                     Err(e) => {
-                        protocol_reader.reset_if_optional(placeholder);
+                        /* protocol_reader.reset_if_optional(placeholder);
                             if placeholder.optional {
                                 return Poll::Ready(Ok(None));
-                            } else {
+                            } else { */
                                 return Poll::Ready(Err(e));
-                            }
+                            /* } */
                     }
                 },
                 Poll::Pending => {
@@ -654,12 +715,11 @@ fn token_expected_error(line_index:usize, line_char_pos:usize) -> ParserError {
 
 fn perform_search<R>(
     cx: &mut Context<'_>,
-    _placeholder: &Placeholder,
     delimiter: &mut String,
     protocol_reader: &mut ProtocolBuffReader<R>,
 ) -> Option<Poll<Result<usize, ParserError>>>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     let finder = Finder::new(delimiter.as_bytes());
     loop {
@@ -672,7 +732,7 @@ where
             }
 
             None => {
-                let result = protocol_reader.fill_buf(cx);
+                let result = protocol_reader.fill_buffer(cx);
                 match result {
                     Poll::Ready(Ok(read_length)) => {
                         if read_length > 0 {
@@ -697,17 +757,16 @@ where
 
 fn read_string<R>(
     cx: &mut Context<'_>,
-    _placeholder: &Placeholder,
     input: &mut String,
     protocol_reader: &mut ProtocolBuffReader<R>,
 ) -> Option<Poll<Result<usize, ParserError>>>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     loop {
         let buf = protocol_reader.get_buffer();
         if buf.len() == 0 || !protocol_reader.buf_has_enough_data(&ReadBytesSize::Fixed(input.len() as u32)) {
-            let result = protocol_reader.fill_buf(cx);
+            let result = protocol_reader.fill_buffer(cx);
             match result {
                 Poll::Ready(Ok(read_length)) => {
                     if read_length > 0 {
@@ -742,21 +801,17 @@ where
     }
 }
 
+#[async_trait]
 impl<T> PlaceHolderRead for ProtocolBuffReader<T>
 where
-    T: AsyncBufRead + Unpin,
+    T: AsyncBufRead + Send + Sync + Unpin,
 {
-    async fn read_placeholder_until<'a, 'b, IP>(
-        self: &'a mut Self,
-        placeholder: &'b Placeholder,
-        delimiter: String,
-        info_provider: &IP,
-    ) -> Result<Option<ValueType>, ParserError>
-    where
-        'a: 'b,
-        IP:InfoProvider
-    {
-        let data = timeout(Duration::from_secs(1), ReadPlaceHolderUntil::new(self, placeholder, delimiter, info_provider)).await;
+    async fn read_placeholder_until(
+        self: &mut Self,        
+        delimiter: String,        
+        spec_metadata: &SpecMetaData,
+    ) -> Result<Option<Vec<u8>>, ParserError>{
+        let data = timeout(Duration::from_secs(1), ReadPlaceHolderUntil::new(self, delimiter)).await;
         match data {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(e),
@@ -764,15 +819,13 @@ where
         }
     }
 
-    async fn read_placeholder_as_string<'a, 'b>(
-        self: &'a mut Self,
-        placeholder: &'b Placeholder,
+    async fn read_placeholder_as_string(
+        self: &mut Self,
         input: String,
-    ) -> Result<Option<ValueType>, ParserError>
-    where
-        'a: 'b,
+        spec_metadata: &SpecMetaData,
+    ) -> Result<Option<Vec<u8>>, ParserError>
     {
-        let data = timeout(Duration::from_secs(1),ReadString::new(self, placeholder, input)).await;
+        let data = timeout(Duration::from_secs(1),ReadString::new(self, input)).await;
         match data {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(e),
@@ -780,14 +833,13 @@ where
         }
     }
     
-    async fn read_bytes<'a, 'b>(
-        self: &'a mut Self,
-        placeholder: &'b Placeholder,
+    async fn read_bytes(
+        self: &mut Self,
         size: ReadBytesSize,
-    ) -> Result<Option<ValueType>, ParserError>
-    where
-        'a: 'b {
-            let data = timeout(Duration::from_secs(1), ReadBytes::new(self, placeholder, size)).await;
+        spec_metadata: &SpecMetaData,
+    ) -> Result<Option<Vec<u8>>, ParserError>
+    {
+            let data = timeout(Duration::from_secs(1), ReadBytes::new(self, size)).await;
             match data {
                 Ok(Ok(data)) => Ok(data),
                 Ok(Err(e)) => Err(e),
@@ -810,7 +862,7 @@ fn is_eof_error(parse_error: &ParserError) -> bool {
     }
 }
 
-fn update_key(key: &mut Option<String>, placeholder: &Placeholder, input_key_data: Option<String>) {
+/* fn update_key(key: &mut Option<String>, placeholder: &Placeholder, input_key_data: Option<String>) {
     match &placeholder.name {
         crate::core::PlaceHolderIdentifier::Key => {
             *key = Some(input_key_data.unwrap().to_owned());
@@ -822,11 +874,11 @@ fn update_key(key: &mut Option<String>, placeholder: &Placeholder, input_key_dat
             println!("unknown placeholder identifier type");
         }
     }
-}
+} */
 
 impl<R> ProtocolBuffReader<R>
 where
-    R: AsyncBufRead + Unpin,
+    R: AsyncBufRead + Send + Sync + Unpin,
 {
     /* #[allow(unused)]
     async fn parse<'a, I>(&mut self, placeholder: &Placeholder, request_info:&mut I) -> Result<PlaceHolderValue, ParserError> where I:RequestInfo<'a>{
@@ -841,7 +893,7 @@ where
         }
     } */
 
-   pub fn mark_if_optional(&mut self, placeholder: &Placeholder){
+   /* pub fn mark_if_optional(&mut self, placeholder: &Placeholder){
         if placeholder.optional {
             self.mark();
         }
@@ -857,11 +909,11 @@ where
         if placeholder.optional {
             self.unmark();
         }
-    }
+    } */
 
 
     #[allow(unused)]
-    pub(super) async fn parse_composite<RI>(
+    /* pub(super) async fn parse_composite<RI>(
         &mut self,
         request_info: &mut RI,
         placeholder: &Placeholder,
@@ -967,13 +1019,13 @@ where
 
 
                                                 match &value_type_option {
-                                                    Some(ValueType::String(data)) => {
+                                                    Some(Value::String(data)) => {
                                                         self.increment_char_index_by(data.len());
                                                         update_key_value(
                                                             request_info,
                                                             &mut key,                                
                                                             constituent,
-                                                            ValueType::String(data.to_owned()),
+                                                            Value::String(data.to_owned()),
                                                             self.line_index,
                                                             self.char_index_in_line,
                                                         )?;
@@ -997,11 +1049,11 @@ where
                                                 i += 1;
 
                                                 match &value_type_option {
-                                                    Some(ValueType::String(str)) => {
+                                                    Some(Value::String(str)) => {
                                                         update_key(&mut key, constituent, Some(str.to_owned()));
                                                         if items.contains(str) {
                                                             self.increment_char_index_by(str.len());
-                                                            request_info.add_info(key.unwrap(), ValueType::String(str.to_owned()));
+                                                            request_info.add_info(key.unwrap(), Value::String(str.to_owned()));
                                                             key = None;
                                         
                                                             //return Ok(());
@@ -1081,7 +1133,7 @@ where
             }
         }
         Ok(())
-    }
+    } */
 
     fn error_token_expected_eof_reached(&mut self) -> ParserError {
         ParserError::TokenExpected {
@@ -1104,22 +1156,22 @@ where
 
     
     
-    async fn read_delimited_string<RI:InfoProvider>(
+    /* async fn read_delimited_string<RI:InfoProvider>(
         &mut self,
         placeholder: &Placeholder,
         constituents: &Vec<Placeholder>,
         i: &mut usize,
         info_provider: &RI,
-    ) -> Result<Option<ValueType>, ParserError> {
+    ) -> Result<Option<Value>, ParserError> {
         let delimiter = self.get_delimiter(constituents, i).await?;
         let result = self
         .read_placeholder_until(placeholder, delimiter.to_owned(), info_provider)
         .await?;
     Ok(result)
         
-    }
+    } */
 
-    async fn get_delimiter(
+    /* async fn get_delimiter(
         &mut self,
         constituents: &Vec<Placeholder>,
         i: &mut usize,
@@ -1156,13 +1208,13 @@ where
             });
         }
     }
-}
+} */
 
-fn handle_type<RI>(
+/* fn handle_type<RI>(
     request_info: &mut RI,
     key: &mut Option<String>,    
     constituent: &Placeholder,
-    result: ValueType,
+    result: Value,
     data: Option<String>,
     line_pos: usize,
     char_pos: usize,
@@ -1197,14 +1249,14 @@ where RI: InfoProvider {
     }
 
 
-}
-}
+}*/
+} 
 
-fn update_key_value1<RI>(
+/* fn update_key_value1<RI>(
     request_info: &mut RI,
     key: &mut Option<String>,    
     constituent: &Placeholder,
-    result: ValueType,
+    result: Value,
     line_pos: usize,
     char_pos: usize,
 ) -> Result<(), ParserError>
@@ -1212,7 +1264,7 @@ where
     RI: InfoProvider,
 {
     let result = match &result {
-        ValueType::String(data) => match &constituent.name {
+        Value::String(data) => match &constituent.name {
             Key => {
                 update_key(key, constituent, Some(data.to_string()));
             }
@@ -1245,14 +1297,14 @@ where
         }
     };
     Ok(result)
-}
+} */
 
 
-fn update_key_value<RI>(
+/* fn update_key_value<RI>(
     request_info: &mut RI,
     key: &mut Option<String>,    
     constituent: &Placeholder,
-    result: ValueType,
+    result: Value,
     line_pos: usize,
     char_pos: usize,
 ) -> Result<(), ParserError>
@@ -1260,11 +1312,11 @@ where
     RI: InfoProvider,
 {
     match &result {
-        ValueType::String(data) => {
+        Value::String(data) => {
             let data = data.to_owned();
             handle_type(request_info, key, constituent, result, Some(data), line_pos, char_pos)
         },
-        ValueType::U8Vec(data) => {
+        Value::U8Vec(data) => {
             handle_type(request_info, key, constituent, result, None, line_pos, char_pos)
         },
         _ => {
@@ -1277,18 +1329,19 @@ where
         }
     }
     
-}
+} */
 
 #[cfg(test)]
 mod tests {
 
+    use serde::de::value;
     use tokio::io::BufReader;
     use tokio_stream::StreamExt;
 
     use crate::core::protocol_reader::ProtoStream;
     use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder,
+        PlaceHolderType, ProtocolSpecBuilder, Spec, SpecBuilder, SpecMetaData
     };
     use crate::test_utils::{assert_result_has_string, TestRequestInfo};
     use crate::core::InfoProvider;
@@ -1303,18 +1356,15 @@ mod tests {
         let request_info = TestRequestInfo::new();
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let result = protocol_reader
-            .read_placeholder_until(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: crate::core::PlaceHolderIdentifier::Name("name".to_string()),
-                    constituents: None, optional:false,
-                },
-                "::".to_string(),
-                &request_info,
+            .read_placeholder_until(                
+                "::".to_string(),                
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
+        let bytes = result.unwrap().unwrap();        
+        assert_eq!(String::from_utf8(bytes).unwrap(), "Hello World".to_string());
 
-        assert_result_has_string(result, "Hello World".to_string());
+        //assert_result_has_string(result, "Hello World".to_string());
     }
 
     #[tokio::test]
@@ -1324,14 +1374,9 @@ mod tests {
         let request_info = TestRequestInfo::new();
         let result = protocol_reader
             .read_placeholder_until(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: crate::core::PlaceHolderIdentifier::Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+                
                 "::".to_string(),
-                &request_info,
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert!(result.is_err());
@@ -1343,15 +1388,9 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let result = protocol_reader
-            .read_placeholder_until(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: crate::core::PlaceHolderIdentifier::Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
-                "::".to_string(),
-                &TestRequestInfo::new(),
+            .read_placeholder_until(                
+                "::".to_string(),   
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false)             
             )
             .await;
         assert_result_has_string(result, "".to_string());
@@ -1363,28 +1402,17 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let result = protocol_reader
             .read_placeholder_until(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+                
                 " ".to_string(),
-                &TestRequestInfo::new()
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "Hello".to_string());
 
         let result = protocol_reader
-            .read_placeholder_until(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+            .read_placeholder_until(                
                 "\n".to_string(),
-                &TestRequestInfo::new(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "World".to_string());
@@ -1396,54 +1424,32 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let result = protocol_reader
             .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
                 "Hello".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "Hello".to_string());
 
         let result = protocol_reader
-            .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+            .read_placeholder_as_string(                
                 " ".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, " ".to_string());
 
         let result = protocol_reader
-            .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+            .read_placeholder_as_string(                
                 "World".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "World".to_string());
 
         let result = protocol_reader
-            .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: crate::core::PlaceHolderIdentifier::InlineKeyWithValue(
-                        "name".to_string(),
-                    ),
-                    constituents: None,
-                    optional:false,
-                },
+            .read_placeholder_as_string(                
                 "\n".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "\n".to_string());
@@ -1456,13 +1462,9 @@ mod tests {
         protocol_reader.mark();
         protocol_reader
             .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+                
                 "Hello".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
@@ -1470,21 +1472,17 @@ mod tests {
 
         let value = protocol_reader
             .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
                 "Hello".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
         protocol_reader.reset();
-
+        
         match value {
-            Some(crate::core::ValueType::String(value)) => {
-                assert!(value == "Hello".to_string());
+            Some(value) => {
+                let str_value = String::from_utf8(value).unwrap();    
+                assert!(str_value == "Hello".to_string());
             }
             _ => {
                 assert!(false);
@@ -1498,14 +1496,9 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         protocol_reader
-            .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+            .read_placeholder_as_string(                
                 "Hello".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
@@ -1542,14 +1535,9 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         protocol_reader.mark();
         protocol_reader
-            .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+            .read_placeholder_as_string(                
                 "Hello".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
@@ -1569,20 +1557,15 @@ mod tests {
         let mut proco_reader: ProtocolBuffReader<_> = stream.into();
 
         let data = proco_reader
-            .read_placeholder_as_string(
-                &Placeholder {
-                    place_holder_type: PlaceHolderType::AnyString,
-                    name: Name("name".to_string()),
-                    constituents: None,
-                    optional:false,
-                },
+            .read_placeholder_as_string(                
                 "ld\n".to_string(),
+                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
         match data {
-            Some(crate::core::ValueType::String(value)) => {
-                assert!(value == "ld\n".to_string());
+            Some(value) => {
+                assert!(String::from_utf8(value).unwrap() == "ld\n".to_string());
             }
             _ => {
                 assert!(false);
@@ -1590,7 +1573,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    /* #[tokio::test]
     async fn parse_composite_test() {
         let root_placeholder =
             Placeholder::new(Name("root".to_string()), None, PlaceHolderType::Composite, false);
@@ -1645,7 +1628,7 @@ mod tests {
         assert!(result.is_ok());
         let request_method = request_info.get_info(&"request_method".to_string()).unwrap();
         match request_method {
-            crate::core::ValueType::String(value) => {
+            crate::core::Value::String(value) => {
                 assert!(*value == "GET".to_string());
             }
             _ => {
@@ -1654,7 +1637,7 @@ mod tests {
         }
 
         match request_info.get_info(&"name".to_owned()).unwrap() {
-            crate::core::ValueType::String(value) => {
+            crate::core::Value::String(value) => {
                 assert!(*value == "value".to_string());
             }
             _ => {
@@ -1663,7 +1646,7 @@ mod tests {
         }
 
         match request_info.get_info(&"name2".to_owned()).unwrap() {
-            crate::core::ValueType::String(value) => {
+            crate::core::Value::String(value) => {
                 assert!(*value == "value2".to_string());
             }
             _ => {
@@ -1672,18 +1655,18 @@ mod tests {
         }
 
         match request_info.get_info(&"data".to_owned()).unwrap() {
-            crate::core::ValueType::String(value) => {
+            crate::core::Value::String(value) => {
                 assert!(*value == "test123".to_string());
             }
             _ => {
                 assert!(false);
             }
         }
-    }
+    } */
 
 
     
-    #[tokio::test]
+    /* #[tokio::test]
     async fn test_read_unexpected_token_error() {
         let data = b"Hello World\n";
         let mut spec = SpecBuilder::new("root".to_owned());
@@ -1756,10 +1739,10 @@ mod tests {
 
             }
         }
-    }
+    } */
 
 
-    #[tokio::test]
+    /* #[tokio::test]
     async fn test_proto_optional_test() {
         let data = b"Hello \r\n";
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
@@ -1776,7 +1759,7 @@ mod tests {
             Ok(_) => {
                 let first_word = request_info.get_info(&"first_word".to_string()).unwrap();
                 match first_word {
-                    crate::core::ValueType::String(value) => {
+                    crate::core::Value::String(value) => {
                         assert!(*value == "Hello".to_string());
                     }
                     _ => {
@@ -1794,7 +1777,7 @@ mod tests {
 
         
         
-    }
+    } */
 
 
     

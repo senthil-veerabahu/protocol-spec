@@ -246,17 +246,17 @@ macro_rules! impl_response_info_and_builder {
 }
 
 pub struct HttpRequestInfo {
-    request_type: ValueType,
-    headers: HashMap<String, ValueType>,
-    protocol_version: Option<ValueType>,
-    request_uri: Option<ValueType>,
-    request_body: Option<ValueType>,
+    request_type: Value,
+    headers: HashMap<String, Value>,
+    protocol_version: Option<Value>,
+    request_uri: Option<Value>,
+    request_body: Option<Value>,
 }
 
 impl Default for HttpRequestInfo {
     fn default() -> Self {
         HttpRequestInfo {
-            request_type: ValueType::String("GET".to_string()),
+            request_type: Value::String("GET".to_string()),
             headers: Default::default(),
             protocol_version: None,
             request_uri: None,
@@ -273,11 +273,11 @@ impl RequestInfo for HttpRequestInfo {
 struct HttpRequestBuilder(HttpRequestInfo);
 
 pub struct HttpResponseInfo {
-    status_code: ValueType,
-    status_text: ValueType,
-    headers: HashMap<String, ValueType>,
-    protocol_version: Option<ValueType>,
-    response_body: Option<ValueType>,
+    status_code: Value,
+    status_text: Value,
+    headers: HashMap<String, Value>,
+    protocol_version: Option<Value>,
+    response_body: Option<Value>,
 }
 
 impl ResponseInfo for HttpResponseInfo {}
@@ -285,10 +285,10 @@ impl ResponseInfo for HttpResponseInfo {}
 impl Default for HttpResponseInfo {
     fn default() -> Self {
         HttpResponseInfo {
-            status_code: ValueType::String("200".to_string()),
+            status_code: Value::String("200".to_string()),
             headers: Default::default(),
-            protocol_version: Some(ValueType::String("HTTP/1.1".to_string())),
-            status_text: ValueType::String("Ok".to_string()),
+            protocol_version: Some(Value::String("HTTP/1.1".to_string())),
+            status_text: Value::String("Ok".to_string()),
             response_body: Default::default(),
         }
     }
@@ -570,7 +570,7 @@ impl ProtocolConfig for HttpConfig {
 }
 
 impl InfoProvider for HttpResponseInfo {
-    fn get_info(&self, key: &String) -> Option<&ValueType> {
+    fn get_info(&self, key: &String) -> Option<&Value> {
         let key_ref = key.as_str();
         match key_ref {
             "status_code" => {
@@ -592,7 +592,7 @@ impl InfoProvider for HttpResponseInfo {
         }
     }
 
-    fn add_info(&mut self, key: String, value: ValueType) {
+    fn add_info(&mut self, key: String, value: Value) {
         match key.as_str() {
             "status_text" => {
                 self.status_text = value;
@@ -618,7 +618,7 @@ impl InfoProvider for HttpResponseInfo {
         Some(self.headers.keys().collect())
     }
 
-    fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType> {
+    fn get_info_mut(&mut self, key: &String) -> Option<&mut Value> {
         todo!()
     }
     
@@ -638,7 +638,7 @@ impl InfoProvider for HttpResponseInfo {
 }
 
 impl InfoProvider for HttpRequestInfo {
-    fn get_info(&self, key: &String) -> Option<&ValueType> {
+    fn get_info(&self, key: &String) -> Option<&Value> {
         let key_ref = key.as_str();
         match key_ref {
             "request_method" => {
@@ -660,7 +660,7 @@ impl InfoProvider for HttpRequestInfo {
         }
     }
 
-    fn add_info(&mut self, key: String, value: ValueType) {
+    fn add_info(&mut self, key: String, value: Value) {
         match key.as_str() {
             "request_method" => {
                 self.request_type = value;
@@ -686,7 +686,7 @@ impl InfoProvider for HttpRequestInfo {
         Some(self.headers.keys().collect())
     }
 
-    fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType> {
+    fn get_info_mut(&mut self, key: &String) -> Option<&mut Value> {
         todo!()
     }
 
@@ -708,7 +708,7 @@ impl InfoProvider for HttpRequestInfo {
 impl HttpRequestInfo {
     #![allow(unused)]
     fn set_request_type(&mut self, request_type: String) {
-        self.request_type = ValueType::String(request_type);
+        self.request_type = Value::String(request_type);
     }
 }
 
@@ -820,12 +820,12 @@ fn build_http_request_info(root_place_holder: Placeholder) -> HttpRequestInfo {
 
     request_info.add_info(
         "RequestMethod".to_string(),
-        ValueType::String("GET".to_string()),
+        Value::String("GET".to_string()),
     );
-    request_info.add_info("RequestUri".to_string(), ValueType::String("/".to_string()));
+    request_info.add_info("RequestUri".to_string(), Value::String("/".to_string()));
     request_info.add_info(
         "ProtocolVersion".to_string(),
-        ValueType::String("HTTP/1.1".to_string()),
+        Value::String("HTTP/1.1".to_string()),
     );
     request_info
 }

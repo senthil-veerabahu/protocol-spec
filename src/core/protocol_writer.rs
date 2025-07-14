@@ -4,7 +4,7 @@ use std::{
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use super::{InfoProvider, ParserError, PlaceHolderType, Placeholder};
+use super::{InfoProvider, ParserError, PlaceHolderType};
 
 #[pin_project]
 pub(super) struct ProtocolBuffWriter<R>
@@ -166,7 +166,7 @@ where
         Ok(())  
     }
 
-    async fn prepare_and_write_data<RI:InfoProvider>(&mut self, request_info: &RI, mut data:  Option<&String>, constituent: &Placeholder, overriding_data: Option<&String>) -> Result<(), ParserError> {
+    /* async fn prepare_and_write_data<RI:InfoProvider>(&mut self, request_info: &RI, mut data:  Option<&String>, constituent: &Placeholder, overriding_data: Option<&String>) -> Result<(), ParserError> {
         if data.is_none() && overriding_data.is_none() {
             match &constituent.name {
                
@@ -232,7 +232,7 @@ where
                 }
             }
         }
-    }
+    } */
 }
 
 
@@ -251,28 +251,28 @@ mod tests {
     use crate::core::protocol_writer::ProtocolBuffWriter;
     use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        InfoProvider, PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder, ValueType
+        InfoProvider, PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder, Value
     };
     
 
     #[derive(Default)]
-    pub struct TestRequestInfo(HashMap<String, ValueType>);
+    pub struct TestRequestInfo(HashMap<String, Value>);
 
     impl TestRequestInfo {
         pub fn new() -> Self {
             let mut r = TestRequestInfo(HashMap::new());
-            r.0.insert("data".to_owned(), ValueType::String("test".to_string()));
-            r.0.insert("data1".to_owned(), ValueType::String("test1".to_string()));
+            r.0.insert("data".to_owned(), Value::String("test".to_string()));
+            r.0.insert("data1".to_owned(), Value::String("test1".to_string()));
             return r;
         }
     }
 
     impl InfoProvider for TestRequestInfo {
-        fn add_info(&mut self, key: String, value: ValueType) {
+        fn add_info(&mut self, key: String, value: Value) {
             self.0.insert(key, value);
         }
 
-        fn get_info(&self, key: &String) -> Option<&crate::core::ValueType> {            
+        fn get_info(&self, key: &String) -> Option<&crate::core::Value> {            
             self.0.get(key)
         }
         
@@ -283,7 +283,7 @@ mod tests {
             Some(self.0.keys().collect())
         }
         
-        fn get_info_mut(&mut self, key: &String) -> Option<&mut ValueType> {
+        fn get_info_mut(&mut self, key: &String) -> Option<&mut Value> {
             if let Some(value) = self.0.get_mut(key) {
                 Some(value)
             } else {
@@ -342,13 +342,13 @@ mod tests {
         let placehoder = spec_builder.build();
     
         let mut request_info = TestRequestInfo::new();
-        request_info.add_info("request_method".to_owned(), ValueType::String("GET".to_owned()));
-        request_info.add_info("request_uri".to_owned(), ValueType::String("/".to_owned()));
-        request_info.add_info("protocol_version".to_owned(), ValueType::String("HTTP/1.1".to_owned()));
+        request_info.add_info("request_method".to_owned(), Value::String("GET".to_owned()));
+        request_info.add_info("request_uri".to_owned(), Value::String("/".to_owned()));
+        request_info.add_info("protocol_version".to_owned(), Value::String("HTTP/1.1".to_owned()));
 
-        request_info.add_info("Content-Length".to_owned(), ValueType::String("100".to_owned()));
+        request_info.add_info("Content-Length".to_owned(), Value::String("100".to_owned()));
         
-        request_info.add_info("body".to_owned(), ValueType::U8Vec("hello".as_bytes().to_vec()));
+        request_info.add_info("body".to_owned(), Value::U8Vec("hello".as_bytes().to_vec()));
         let (mut receiver, mut sender) = tokio::io::simplex(64);
                 
         ProtocolBuffWriter::new(&mut sender)
