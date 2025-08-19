@@ -1,10 +1,13 @@
+use async_trait::async_trait;
 use pin_project::pin_project;
 use std::{
      io::{self}, pin::Pin, task::{Context, Poll}
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use super::{InfoProvider, ParserError, PlaceHolderType};
+use crate::core::SpecWrite;
+
+use super::ParserError;
 
 #[pin_project]
 pub(super) struct ProtocolBuffWriter<R>
@@ -52,15 +55,81 @@ where
     }
 }
 
+#[async_trait]
+pub trait PlaceHolderWrite  where Self: AsyncWrite  + Unpin{
+     async fn write_string(&mut self, data: String) -> Result<(), ParserError>{
+        self.write(data.as_bytes()).await?;
+        Ok(())
+    }
+
+    async fn write_data_u8(&mut self, data: u8) -> Result<(), ParserError>{
+        self.write_u8(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_u16(&mut self, data: u16) -> Result<(), ParserError>{
+        self.write_u16(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_u32(&mut self, data: u32) -> Result<(), ParserError>{
+        self.write_u32(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_u64(&mut self, data: u64) -> Result<(), ParserError>{
+        self.write_u64(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_i8(&mut self, data: i8) -> Result<(), ParserError>{
+        self.write_i8(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_i16(&mut self, data: i16) -> Result<(), ParserError>{
+        self.write_i16(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_i32(&mut self, data: i32) -> Result<(), ParserError>{
+        self.write_i32(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_i64(&mut self, data: i64) -> Result<(), ParserError>{
+        self.write_i64(data).await?;
+        Ok(())
+    }
+
+    async fn write_data_bytes(&mut self, data: &[u8]) -> Result<(), ParserError>{
+        self.write(data).await?;
+        Ok(())
+    }
+
+}
+
+#[async_trait]
+impl<R> PlaceHolderWrite for ProtocolBuffWriter<R>
+where
+    R: AsyncWrite + Unpin{}
+
+impl<R> SpecWrite for ProtocolBuffWriter<R>
+where
+    R: AsyncWrite + Unpin + Send + Sync
+{}
+
+
 impl<R> ProtocolBuffWriter<R>
 where
     R: AsyncWrite + Unpin,
-{    
+{   
 
-    #[allow(unused)]
+
+    /* #[allow(unused)]
     pub(super) async fn write_composite<RI>(
         &mut self,
-        placeholder: &Placeholder,
+        spec: &ListSpec,
         request_info: &RI,
         key:  Option<&String>,
         
@@ -68,10 +137,8 @@ where
     where
         RI: InfoProvider,
     {
-        match &placeholder.constituents {
-            None => {
-                panic!("Constituents not found for composite type");
-            }
+        match spec {
+            
             Some(constituents) => {
                 //for i in 0..constituents.len() {
                 let  mut i = 0;
@@ -164,7 +231,7 @@ where
         }
         self.flush().await?;
         Ok(())  
-    }
+    } */
 
     /* async fn prepare_and_write_data<RI:InfoProvider>(&mut self, request_info: &RI, mut data:  Option<&String>, constituent: &Placeholder, overriding_data: Option<&String>) -> Result<(), ParserError> {
         if data.is_none() && overriding_data.is_none() {
@@ -251,8 +318,9 @@ mod tests {
     use crate::core::protocol_writer::ProtocolBuffWriter;
     use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        InfoProvider, PlaceHolderType, Placeholder, ProtocolSpecBuilder, SpecBuilder, Value
+        new_spec_builder, CustomSpecBuilder, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, ProtoSpecBuilder, RepeatBuilder, StringSpecBuilder, Value, ValueBuilder
     };
+    use crate::http::BodySpec;
     
 
     #[derive(Default)]
@@ -298,15 +366,19 @@ mod tests {
 
     
 
-    #[tokio::test]
+    /* #[tokio::test]
     async fn test_write_composite() {        
         let root_placeholder =
-            Placeholder::new(Name("root".to_string()), None, PlaceHolderType::Composite, false);
+            new_spec_builder("root".to_string(), false);
 
-        let mut spec_builder = SpecBuilder(root_placeholder);
+        
 
-        let request_line_placeholder = SpecBuilder::new_composite("request_line".to_string(), false)
+        let request_line_placeholder = new_spec_builder("request_line".to_string(), false);
+        let request_line_spec = request_line_placeholder
+            .inline_value_follows("request_method".to_string(), false)
             .expect_one_of_string(
+                None,
+                false,
                 vec![
                     "GET".to_string(),
                     "POST".to_string(),
@@ -314,32 +386,32 @@ mod tests {
                     "PUT".to_string(),
                     "OPTIONS".to_string(),
                 ],
-                InlineKeyWithValue("request_method".to_string()),
-                false
             )
-            .expect_space()
-            .expect_string(InlineKeyWithValue("request_uri".to_string()),false)
-            .expect_space()
-            .expect_string(InlineKeyWithValue("protocol_version".to_string()), false)
-            .expect_newline()
+            .delimited_by_space()
+            .inline_value_follows("request_uri".to_string(),false)
+            .expect_string(None,false)
+            .delimited_by_space()
+            .inline_value_follows("protocol_version".to_string(),false)
+            .expect_string(None,false)
+            .delimited_by_newline()
             .build();
 
-        let mut header_placeholder_builder = SpecBuilder::new_composite("header".to_string(), false);
+        let mut header_placeholder_builder = new_spec_builder("header".to_string(), false);
         let header_place_holder = header_placeholder_builder
-            .expect_string(crate::core::PlaceHolderIdentifier::Key, false)
-            .expect_delimiter(": ".to_string())
-            .expect_string(crate::core::PlaceHolderIdentifier::Value, false)
-            .expect_newline()
+            .key_follows("header_name".to_string(), false)
+            .expect_string(None, false)
+            .delimited_by_space()
+            .value_follows("header_value".to_string(), false)
+            .expect_string(None, false)
+            .delimited_by_newline()
             .build();
 
-        spec_builder.expect_composite(request_line_placeholder, "first_line".to_owned());        
-        spec_builder.expect_repeat_many(header_place_holder, "headers".to_owned());
-        //spec_builder.expect_exact_string(InlineKeyWithValue("data".to_string()), "test123".to_string(), false);
-        spec_builder.expect_newline();
-        spec_builder.expect_bytes_of_size_from_header(InlineKeyWithValue("body".to_string()), 
-            "Content-Length".to_string(), true);
-
-        let placehoder = spec_builder.build();
+        let spec = root_placeholder
+            .use_spec(Box::new(request_line_spec))
+            .repeat_many(Some("headers".to_string()), false, header_place_holder)
+            .expect_newline()
+            .use_spec(Box::new(BodySpec::new(None, true)))
+            .build();
     
         let mut request_info = TestRequestInfo::new();
         request_info.add_info("request_method".to_owned(), Value::String("GET".to_owned()));
@@ -363,5 +435,5 @@ mod tests {
         println!("Result: {}", result);
 
         
-    }
+    } */
 }

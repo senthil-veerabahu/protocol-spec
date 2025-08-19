@@ -8,7 +8,7 @@ use tokio::{io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, ReadBuf}, time::timeo
 use tokio_stream::Stream;
 
 use crate::core::{
-    Parse, ParserError, PlaceHolderIdentifier::{InlineKeyWithValue, Key}, PlaceHolderType, PlaceHolderValue,  Protocol, SpecMetaData, SpecRead, Value, ValueType
+    SpecDeserialize, ParserError, PlaceHolderIdentifier::{InlineKeyWithValue, Key},   Protocol, SpecMetaData, SpecRead, Value, ValueType
 };
 
 use super::{InfoProvider, ValueExtractor};
@@ -113,14 +113,14 @@ pub trait PlaceHolderRead {
     async fn read_placeholder_as_string(
         self: & mut Self,
         input: String,
-        spec_metadata: &SpecMetaData,
+        
     ) -> Result<Option<Vec<u8>>, ParserError>;
 
     #[allow(unused)]
     async fn read_placeholder_until(
         self: &mut Self,        
         delimiter: String,        
-        spec_metadata: &SpecMetaData,
+        
     ) -> Result<Option<Vec<u8>>, ParserError>;
 
 
@@ -128,7 +128,7 @@ pub trait PlaceHolderRead {
     async fn read_bytes(
         self: & mut Self,        
         size: ReadBytesSize,
-        spec_metadata: &SpecMetaData,
+        
     ) -> Result<Option<Vec<u8>>, ParserError>;
 }
 
@@ -144,7 +144,7 @@ pub trait MarkAndRead:AsyncBufRead + Unpin + Send + Sync {
 
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct Marker{
+pub struct Marker{
     pos:usize,
 }
 
@@ -809,7 +809,7 @@ where
     async fn read_placeholder_until(
         self: &mut Self,        
         delimiter: String,        
-        spec_metadata: &SpecMetaData,
+        
     ) -> Result<Option<Vec<u8>>, ParserError>{
         let data = timeout(Duration::from_secs(1), ReadPlaceHolderUntil::new(self, delimiter)).await;
         match data {
@@ -822,7 +822,6 @@ where
     async fn read_placeholder_as_string(
         self: &mut Self,
         input: String,
-        spec_metadata: &SpecMetaData,
     ) -> Result<Option<Vec<u8>>, ParserError>
     {
         let data = timeout(Duration::from_secs(1),ReadString::new(self, input)).await;
@@ -836,7 +835,6 @@ where
     async fn read_bytes(
         self: &mut Self,
         size: ReadBytesSize,
-        spec_metadata: &SpecMetaData,
     ) -> Result<Option<Vec<u8>>, ParserError>
     {
             let data = timeout(Duration::from_secs(1), ReadBytes::new(self, size)).await;
@@ -1339,10 +1337,7 @@ mod tests {
     use tokio_stream::StreamExt;
 
     use crate::core::protocol_reader::ProtoStream;
-    use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
-    use crate::core::{
-        PlaceHolderType, ProtocolSpecBuilder, Spec, SpecBuilder, SpecMetaData
-    };
+    
     use crate::test_utils::{assert_result_has_string, TestRequestInfo};
     use crate::core::InfoProvider;
 
@@ -1357,9 +1352,7 @@ mod tests {
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let result = protocol_reader
             .read_placeholder_until(                
-                "::".to_string(),                
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
-            )
+                "::".to_string())
             .await;
         let bytes = result.unwrap().unwrap();        
         assert_eq!(String::from_utf8(bytes).unwrap(), "Hello World".to_string());
@@ -1376,7 +1369,6 @@ mod tests {
             .read_placeholder_until(
                 
                 "::".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert!(result.is_err());
@@ -1389,8 +1381,7 @@ mod tests {
 
         let result = protocol_reader
             .read_placeholder_until(                
-                "::".to_string(),   
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false)             
+                "::".to_string(),
             )
             .await;
         assert_result_has_string(result, "".to_string());
@@ -1404,7 +1395,6 @@ mod tests {
             .read_placeholder_until(
                 
                 " ".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "Hello".to_string());
@@ -1412,7 +1402,6 @@ mod tests {
         let result = protocol_reader
             .read_placeholder_until(                
                 "\n".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "World".to_string());
@@ -1425,7 +1414,6 @@ mod tests {
         let result = protocol_reader
             .read_placeholder_as_string(
                 "Hello".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "Hello".to_string());
@@ -1433,7 +1421,6 @@ mod tests {
         let result = protocol_reader
             .read_placeholder_as_string(                
                 " ".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, " ".to_string());
@@ -1441,7 +1428,6 @@ mod tests {
         let result = protocol_reader
             .read_placeholder_as_string(                
                 "World".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "World".to_string());
@@ -1449,7 +1435,6 @@ mod tests {
         let result = protocol_reader
             .read_placeholder_as_string(                
                 "\n".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await;
         assert_result_has_string(result, "\n".to_string());
@@ -1464,7 +1449,6 @@ mod tests {
             .read_placeholder_as_string(
                 
                 "Hello".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
@@ -1473,7 +1457,6 @@ mod tests {
         let value = protocol_reader
             .read_placeholder_as_string(
                 "Hello".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
@@ -1498,7 +1481,6 @@ mod tests {
         protocol_reader
             .read_placeholder_as_string(                
                 "Hello".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
@@ -1537,7 +1519,6 @@ mod tests {
         protocol_reader
             .read_placeholder_as_string(                
                 "Hello".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();
@@ -1559,7 +1540,6 @@ mod tests {
         let data = proco_reader
             .read_placeholder_as_string(                
                 "ld\n".to_string(),
-                &SpecMetaData::new(String::new(), crate::core::ValueType::String, false),
             )
             .await
             .unwrap();

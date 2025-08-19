@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::to_string;
 
 
-use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
 use crate::core::*;
+
+
 use paste::paste;
 use std::collections::HashMap;
 use std::io::Error;
@@ -65,33 +66,33 @@ macro_rules! create_with_headers {
 #[macro_export]
 macro_rules! create_value_type {
     (String, $value:expr) => {
-        ValueType::String($value)
+        Value::String($value)
     };
 
     (i64, $value:expr) => {
-        ValueType::SignedNumber64($value)
+        Value::SignedNumber64($value)
     };
 
     (u64, $value:expr) => {
-        ValueType::UnSignedNumber64($value)
+        Value::UnSignedNumber64($value)
     };
 
     (u32, $value:expr) => {
-        ValueType::UnSignedNumber32($value)
+        Value::UnSignedNumber32($value)
     };
 
     (i16, $value:expr) => {
-        ValueType::SignedNumber16($value)
+        Value::SignedNumber16($value)
     };
 
     (u16, $value:expr) => {
-        ValueType::UnSignedNumber16($value)
+        Value::UnSignedNumber16($value)
     };
 
     
 
    (Vecu8,  $value:expr) =>{
-        ValueType::U8Vec($value)
+        Value::U8Vec($value)
    }
 }
 
@@ -346,7 +347,7 @@ impl_request_info_and_builder!(
     ( "X-Permitted-Cross-Domain-Policies", x_permitted_cross_domain_policies, String)
 ); 
 
-pub struct HttpRequestFactory(pub Placeholder);
+pub struct HttpRequestFactory(pub ListSpec);
 
 pub struct HttpRequestHandler;
 
@@ -478,7 +479,7 @@ impl
         HttpResponseInfo,
     > for HttpRequestFactory
 {
-    fn get_request_spec(&self) -> &Placeholder {
+    fn get_request_spec(&self) -> &ListSpec {
         &self.0
     }
 
@@ -499,7 +500,7 @@ impl
     }
 }
 
-pub struct HttpResponseFactory(pub Placeholder);
+pub struct HttpResponseFactory(pub ListSpec);
 
 pub struct HttpResponseHandler;
 
@@ -523,7 +524,7 @@ impl ResponseErrorHandler<HttpResponseInfo> for HttpResponseHandler {
 impl ResponseFactory<HttpResponseInfo, DefaultSerializer, HttpResponseHandler, HttpResponseHandler>
     for HttpResponseFactory
 {
-    fn get_response_spec(&self) -> &Placeholder {
+    fn get_response_spec(&self) -> &ListSpec {
         &self.0
     }
 
@@ -733,18 +734,18 @@ impl From<serde_json::Error> for ParserError {
 }
 
 #[allow(unused)]
-pub fn build_http_request_protocol() -> Placeholder {
-    let root_placeholder = Placeholder::new(
-        Name("root".to_string()),
-        None,
-        PlaceHolderType::Composite,
-        false,
-    );
+pub fn build_http_request_protocol() -> ListSpec {
+    
+    let space = " ";
+    let newline = "\r\n";
+    let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 
-    let mut spec_builder = SpecBuilder(root_placeholder);
+    let request_line_placeholder= ProtoSpecBuilderData::<BuildFromScratch>::new_with("request_line".to_string(), false);
+    let request_line_placeholder = request_line_placeholder.inline_value_follows("request_method".to_owned(), false);
 
-    let request_line_placeholder = SpecBuilder::new_composite("request_line".to_string(), false)
-        .expect_one_of_string(
+        let request_line_placeholder = request_line_placeholder.expect_one_of_string(
+            None,
+            false,
             vec![
                 "GET".to_string(),
                 "POST".to_string(),
@@ -752,70 +753,124 @@ pub fn build_http_request_protocol() -> Placeholder {
                 "PUT".to_string(),
                 "OPTIONS".to_string(),
             ],
-            InlineKeyWithValue("request_method".to_string()),
-            false,
         )
-        .expect_space()
-        .expect_string(InlineKeyWithValue("request_uri".to_string()), false)
-        .expect_space()
-        .expect_string(InlineKeyWithValue("protocol_version".to_string()), false)
-        .expect_newline()
+        .delimited_by_newline()
+
+        .inline_value_follows("request_uri".to_owned(), false)
+        .expect_string(
+            None,
+            false,
+            
+        )
+        .delimited_by_space()
+
+        .inline_value_follows("protocol_version".to_owned(), false)
+        .expect_string(None,false)
+        .delimited_by_space()
         .build();
 
-    let mut header_placeholder_builder = SpecBuilder::new_composite("header".to_string(), false);
+    let mut header_placeholder_builder = new_spec_builder("header".to_string(), false);
+    //let mut header_placeholder_builder = header_placeholder_builder.delimited_by_newline();
+
     let header_place_holder = header_placeholder_builder
-        .expect_string(crate::core::PlaceHolderIdentifier::Key, false)
-        .expect_delimiter(": ".to_string())
-        .expect_string(crate::core::PlaceHolderIdentifier::Value, false)
-        .expect_newline()
+        .key_follows("header-name".to_string(), true)
+        .expect_string( None, false)
+        .delimited_by(": ".to_string())
+        .expect_string(None, false)
+        .delimited_by_newline()
         .build();
 
-    spec_builder.expect_composite(request_line_placeholder, "first_line".to_owned());
-    spec_builder.expect_repeat_many(header_place_holder, "headers".to_owned());
-    spec_builder.expect_newline();
-    spec_builder.expect_bytes_of_size_from_header(InlineKeyWithValue("request_body".to_string()), "Content-Length".to_owned(),true);
+    let spec_builder = spec_builder.expect_composite(request_line_placeholder)
+    .repeat_many(Some("headers".to_owned()), true, header_place_holder)
+    .expect_newline()
+    .use_spec(Box::new(BodySpec::new(None, true)));
 
     spec_builder.build()
 }
 
+pub struct BodySpec{
+    spec_meta_data: SpecMetaData,
+}
+
+impl BodySpec{
+    pub fn new(name: Option<String>, optional: bool) -> Self{
+        let name = name.unwrap_or("request-body-reader".to_owned());
+        let spec_meta_data = SpecMetaData::new(name, ValueType::None, optional);
+        BodySpec { spec_meta_data: spec_meta_data }
+    }
+}
+
+#[async_trait]
+impl SpecDeserialize for BodySpec{
+    async fn deserialize (
+        &self,
+        info_provider: &mut ( dyn InfoProvider + Send + Sync ),
+        reader: &mut (dyn SpecRead),
+    ) -> Result<Value, ParserError>{
+        let content_length_option = info_provider.get_info(&"Content-Length".to_owned());
+        let content_length_str = content_length_option.unwrap().get_string_value();
+        let content_length: u32 = content_length_str.unwrap().parse().expect("Failed to parse string to u16 for content-length header");
+        NBytesSpec::new("n-byte-content-length-read".to_string(), content_length, self.spec_meta_data.is_optional()).deserialize(info_provider, reader).await
+    }
+}
+
+impl Spec for BodySpec{
+    fn get_meta_data(&self) -> &SpecMetaData {
+        &self.spec_meta_data
+    }
+}
+
+#[async_trait]
+impl SpecSerialize for BodySpec{
+
+    async fn serialize (
+            &self,
+            info_provider: & ( dyn InfoProvider + Send + Sync ),
+            reader: &mut (dyn SpecWrite),
+        ) -> Result<(), ParserError>{
+            todo!("implement")
+        }
+    
+}
+
 #[allow(unused)]
-pub fn build_http_response_protocol() -> Placeholder {
-    let root_placeholder = Placeholder::new(
-        Name("root".to_string()),
-        None,
-        PlaceHolderType::Composite,
+pub fn build_http_response_protocol() -> ListSpec {
+    let root_builder = new_spec_builder(
+        "root".to_string(),
         false,
     );
 
-    let mut spec_builder = SpecBuilder(root_placeholder);
-
-    let response_line_placeholder = SpecBuilder::new_composite("response_line".to_string(), false)
-        .expect_string(InlineKeyWithValue("protocol_version".to_string()), false)
-        .expect_space()
-        .expect_string(InlineKeyWithValue("status_code".to_string()), false)
-        .expect_space()
-        .expect_string(InlineKeyWithValue("status_text".to_string()), false)
-        .expect_newline()
+    let response_line_placeholder = new_spec_builder("response_line".to_string(), false)
+        .inline_value_follows("protocol_version".to_string(), false)
+        .expect_string(None, false)
+        .delimited_by_space()
+        .inline_value_follows("status_code".to_string(), false)
+        .expect_string(None, false)
+        .delimited_by_space()
+        .inline_value_follows("status_text".to_string(), false)
+        .expect_string(None, false)
+        .delimited_by_newline()
         .build();
 
-    let mut header_placeholder_builder = SpecBuilder::new_composite("header".to_string(), false);
+    let mut header_placeholder_builder = new_spec_builder("header".to_string(), false);
     let header_place_holder = header_placeholder_builder
-        .expect_string(crate::core::PlaceHolderIdentifier::Key, false)
-        .expect_delimiter(": ".to_string())
-        .expect_string(crate::core::PlaceHolderIdentifier::Value, false)
-        .expect_newline()
+        .key_follows("header_name".to_string(), false)
+        .expect_string(None, false)
+        .delimited_by(": ".to_string())
+        .value_follows("header_value".to_string(), false)
+        .expect_string(None, false)
+        .delimited_by_newline()
         .build();
 
-    spec_builder.expect_composite(response_line_placeholder, "first_line".to_owned());
-    spec_builder.expect_repeat_many(header_place_holder, "headers".to_owned());
-    spec_builder.expect_newline();
-    spec_builder.expect_bytes_of_size(InlineKeyWithValue("response_body".to_string()),10,true);
-
-    spec_builder.build()
+    let root_builder = root_builder.expect_composite(response_line_placeholder)
+    .repeat_many( Some("headers".to_owned()), true, header_place_holder)
+    .expect_newline()
+    .use_spec(Box::new(BodySpec::new(None, true)));
+    root_builder.build()
 }
 
 #[allow(unused)]
-fn build_http_request_info(root_place_holder: Placeholder) -> HttpRequestInfo {
+fn build_http_request_info() -> HttpRequestInfo {
     let mut request_info = HttpRequestInfo::default();
 
     request_info.add_info(
