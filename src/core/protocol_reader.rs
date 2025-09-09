@@ -8,71 +8,10 @@ use tokio::{io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, ReadBuf}, time::timeo
 use tokio_stream::Stream;
 
 use crate::core::{
-    SpecDeserialize, ParserError, PlaceHolderIdentifier::{InlineKeyWithValue, Key},   Protocol, SpecMetaData, SpecRead, Value, ValueType
+    ParserError, SpecRead
 };
 
-use super::{InfoProvider, ValueExtractor};
 
-/* fn poll_test<'a, R, F, T>(reader: &mut ProtocolBuffReader<R>, cx:&mut Context<'a>) -> F where R: AsyncBufRead + Unpin, F: FnMut(&mut Context<'_>) -> Poll<T>, {
-    |cx| {
-        let mut pinned_reader = Pin::new(reader);
-        pinned_reader.poll_next(cx)
-    }
-
-} */
-
-/*
-#[pin_project]
- struct StreamIterator<R>(&mut ProtocolBuffReader<R>) where R: AsyncBufRead + Unpin;
-
-impl <R> Future for StreamIterator<R> where  R: AsyncBufRead + Unpin {
-    type Output = Option<io::Result<u8>>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-
-        let mut pinned_self = self.project();
-        let mut pinned_reader = Pin::new(&mut pinned_self.0);
-        let result = pinned_reader.poll_next(cx);
-        match result {
-            Poll::Ready(Some(Ok(value))) => {
-                return Poll::Ready(Some(Ok(value)));
-            },
-            Poll::Ready(Some(Err(err))) => {
-                return Poll::Ready(Some(Err(err)));
-            },
-            Poll::Ready(None) => {
-                println!("EOF");
-                return Poll::Ready(None);
-            },
-            Poll::Pending => {
-                return Poll::Pending;
-            }
-        }
-    }
-} */
-
-
-/* 
-
-impl <R> ConsumingRead for ProtocolBuffReader<R>
-where
-    R: AsyncBufRead + Send + Sync + Unpin,
-{
-    fn consume(&mut self, amount: usize) {
-        /*  if self.pos + amount > self.cap {
-             self.buf.clear();
-             self.pos = 0;
-         } */
-         if self.pos >= self.buf.len() / 2 && !&self.has_markers() {
-             self.buf.drain(0..self.pos + amount);
-             self.pos = 0;
-         } else {
-             self.pos += amount;
-         }
-    }
-} */
-
-//fn parse(parse: Parse)
 
 impl<R> Stream for ProtoStream<R>
 where
@@ -483,12 +422,9 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut this = self.project();
-
-        //let placeholder = this.placeholder;
         let read_bytes_expected_size = this.size;
         let protocol_reader = &mut this.protocol_reader;
-        
-        //protocol_reader.mark_if_optional(placeholder);
+                
         loop {
             let buf = protocol_reader.get_buffer();
             if buf.len() == 0 || !protocol_reader.buf_has_enough_data(read_bytes_expected_size) {
@@ -498,26 +434,15 @@ where
                         if read_length > 0 {
                             continue;
                         } else {
-                            if let ReadBytesSize::Fixed(size) = read_bytes_expected_size {
-                                
-                                //protocol_reader.unmark_if_optional(placeholder);
-                                //if placeholder.optional {
+                            if let ReadBytesSize::Fixed(_) = read_bytes_expected_size {                                
                                     return Poll::Ready(Ok(None));
-                                /* }else{
-                                    return Poll::Ready(Err(ParserError::TokenExpected {
-                                        line_index: protocol_reader.line_index,
-                                        char_index: protocol_reader.char_index_in_line,
-                                        message: format!("Expected bytes of size {} not found, EOF reached",size),
-                                    }));
-                                } */
-
                             }
                             
                         }
                     }
                     Poll::Pending => {
                         //todo: check if pending needs to be handled differently
-                        if let ReadBytesSize::Fixed(size) = read_bytes_expected_size {
+                        if let ReadBytesSize::Fixed(_) = read_bytes_expected_size {
                             return Poll::Pending;
                         }
                     }
@@ -815,7 +740,7 @@ where
         match data {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(e),
-            Err(e) => Err(ParserError::EndOfStream),
+            Err(_) => Err(ParserError::EndOfStream),
         }
     }
 
@@ -828,7 +753,7 @@ where
         match data {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(e),
-            Err(e) => Err(ParserError::EndOfStream),
+            Err(_e) => Err(ParserError::EndOfStream),
         }
     }
     
@@ -841,7 +766,7 @@ where
             match data {
                 Ok(Ok(data)) => Ok(data),
                 Ok(Err(e)) => Err(e),
-                Err(e) => Err(ParserError::EndOfStream),
+                Err(_e) => Err(ParserError::EndOfStream),
             }
     }
 }
@@ -1332,14 +1257,14 @@ where
 #[cfg(test)]
 mod tests {
 
-    use serde::de::value;
+    
     use tokio::io::BufReader;
     use tokio_stream::StreamExt;
 
     use crate::core::protocol_reader::ProtoStream;
     
-    use crate::test_utils::{assert_result_has_string, TestRequestInfo};
-    use crate::core::InfoProvider;
+    use crate::test_utils::assert_result_has_string;
+    
 
     
     use super::{PlaceHolderRead, ProtocolBuffReader};
@@ -1348,7 +1273,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_string_until() {
         let data = b"Hello World::";
-        let request_info = TestRequestInfo::new();
+        //let request_info = TestRequestInfo::new();
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let result = protocol_reader
             .read_placeholder_until(                
@@ -1363,8 +1288,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_string_until_delimiter_missing() {
         let data = b"Hello World";
-        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
-        let request_info = TestRequestInfo::new();
+        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);        
         let result = protocol_reader
             .read_placeholder_until(
                 

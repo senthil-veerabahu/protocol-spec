@@ -10,8 +10,8 @@ async fn main() {
     protocol_spec::core::ServerInstanceBuilder::<HttpConfig>::default();
     http_server_builder = http_server_builder
         .hosts(vec!["127.0.0.1:8080".to_string()/* , "192.168.1.2:8080".to_string() */])
-        .request_factory(HttpRequestFactory(build_http_request_protocol()))
-        .response_factory(HttpResponseFactory(build_http_response_protocol()));
+        .request_factory(HttpRequestFactory::new(build_http_request_protocol()))
+        .response_factory(HttpResponseFactory::new(build_http_response_protocol()));
         
     let server = http_server_builder.build().unwrap();
 

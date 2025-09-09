@@ -318,17 +318,23 @@ mod tests {
     use crate::core::protocol_writer::ProtocolBuffWriter;
     use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        new_spec_builder, CustomSpecBuilder, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, ProtoSpecBuilder, RepeatBuilder, StringSpecBuilder, Value, ValueBuilder
+        new_spec_builder, CustomSpecBuilder, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, Mapper, ProtoSpecBuilder, RepeatBuilder, StringSpecBuilder, Value, ValueBuilder
     };
     use crate::http::BodySpec;
+    use crate::mapping_extractor::DefaultMapper;
     
 
-    #[derive(Default)]
-    pub struct TestRequestInfo(HashMap<String, Value>);
+    pub struct TestRequestInfo(HashMap<String, Value>, Box<dyn Mapper>);
+
+    impl Default for TestRequestInfo{
+        fn default() -> Self {
+            TestRequestInfo(HashMap::new(), Box::new(DefaultMapper::new()))
+        }
+    }
 
     impl TestRequestInfo {
         pub fn new() -> Self {
-            let mut r = TestRequestInfo(HashMap::new());
+            let mut r = TestRequestInfo(HashMap::new(), Box::new(DefaultMapper::new()));
             r.0.insert("data".to_owned(), Value::String("test".to_string()));
             r.0.insert("data1".to_owned(), Value::String("test1".to_string()));
             return r;
@@ -361,6 +367,14 @@ mod tests {
         
         fn has_all_data(&self) -> bool {
             todo!()
+        }
+        
+        fn get_mapper_mut(&mut self) ->&mut Box<dyn crate::core::Mapper> {
+            &mut self.1
+        }
+        
+        fn get_mapper(&self) ->&Box<dyn Mapper> {
+             &self.1
         }
     }
 
