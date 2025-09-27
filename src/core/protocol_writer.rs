@@ -350,24 +350,7 @@ mod tests {
             self.0.get(key)
         }
         
-        fn get_keys_by_group_name(&self, _name:String) -> Option<Vec<&String>>{
-            if _name == "headers" {
-                return Some(self.0.keys().filter(|k| k.starts_with("data")).collect());
-            }
-            Some(self.0.keys().collect())
-        }
         
-        fn get_info_mut(&mut self, key: &String) -> Option<&mut Value> {
-            if let Some(value) = self.0.get_mut(key) {
-                Some(value)
-            } else {
-                None
-            }
-        }
-        
-        fn has_all_data(&self) -> bool {
-            todo!()
-        }
         
         fn get_mapper_mut(&mut self) ->&mut Box<dyn crate::core::Mapper> {
             &mut self.1

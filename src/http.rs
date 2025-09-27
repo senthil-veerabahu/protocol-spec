@@ -359,11 +359,19 @@ pub struct HttpRequestFactory{
     mapper: Box<dyn Mapper>,
 }
 
+/* impl Clone for Box<dyn Mapper>{
+    fn clone(&self) -> Self {
+        self.clone()
+    }
+} */
+
 
 impl HttpRequestFactory{
     pub fn new(spec: ListSpec) ->Self{
         let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
+
         spec.traverse(&mut mapper);
+        
         Self { 
             spec,
             mapper, 
@@ -505,7 +513,7 @@ impl
     }
 
     fn create_request_info(&self) -> HttpRequestInfo {
-        HttpRequestInfo::default()
+        HttpRequestInfo::default()        
     }
 
     fn create_request_serializer(&self) -> DefaultSerializer {
@@ -523,7 +531,7 @@ impl
 
 pub struct HttpResponseFactory{
     response_spec: ListSpec,
-    response_mapper: Box<dyn Mapper>,
+    mapper: Box<dyn Mapper>,
 }
 
 
@@ -533,7 +541,7 @@ impl HttpResponseFactory{
         spec.traverse(&mut mapper);
         Self { 
             response_spec: spec,
-            response_mapper:  mapper, 
+            mapper:  mapper, 
         }
     }
 }
@@ -576,7 +584,7 @@ impl ResponseFactory<HttpResponseInfo, DefaultSerializer, HttpResponseHandler, H
         HttpResponseHandler
     }
 
-    fn create_error_responset_handler(&self) -> HttpResponseHandler {
+    fn create_error_response_handler(&self) -> HttpResponseHandler {
         HttpResponseHandler
     }
 }
@@ -607,11 +615,11 @@ impl ProtocolConfig for HttpConfig {
 }
 
 impl InfoProvider for HttpResponseInfo {
-    fn get_info(&self, key: &String) -> Option<&Value> {
+    /* fn get_info(&self, key: &String) -> Option<&Value> {
         let key_ref = key.as_str();
         match key_ref {
             "status_code" | "protocol_version" | "status_text" | "response_body"=> {
-                return self.get_mapper().get_value_by_key(key_ref);
+                return self.get_mapper().get_in(key_ref);
             }
             _ => {
                 return self.mapper.get_value_by_key(key_ref);
@@ -629,29 +637,7 @@ impl InfoProvider for HttpResponseInfo {
                 self.get_mapper_mut().add_to_key_value_list(key, value, "header-name".to_string(), "header-value".to_string());
             }
         }
-    }
-
-    fn get_keys_by_group_name(&self, name: String) -> Option<Vec<&String>> {
-        Some(self.headers.keys().collect())
-    }
-
-    fn get_info_mut(&mut self, key: &String) -> Option<&mut Value> {
-        todo!()
-    }
-    
-    fn has_all_data(&self) -> bool {
-        if let Some(content_length) =  self.get_content_length() {
-            if let Some(body_value_type) = self.get_info(&"response_body".to_owned()) {
-                if let Some(body) = body_value_type.get_u8_vec() {
-                    if content_length == body.len().to_string() {
-                        return true;
-                    }
-                }
-            }
-            return false
-        }
-        return self.headers.capacity() > 0;
-    }
+    } */
     
     fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper> {
         &mut self.mapper
@@ -688,27 +674,7 @@ impl InfoProvider for HttpRequestInfo {
         }
     }
 
-    fn get_keys_by_group_name(&self, name: String) -> Option<Vec<&String>> {
-        Some(self.headers.keys().collect())
-    }
-
-    fn get_info_mut(&mut self, key: &String) -> Option<&mut Value> {
-        todo!()
-    }
-
-    fn has_all_data(&self) -> bool {
-        if let Some(content_length) =  self.get_content_length() {
-            if let Some(body_value_type) = self.get_info(&"request_body".to_owned()) {
-                if let Some(body) = body_value_type.get_u8_vec() {
-                    if content_length == body.len().to_string() {
-                        return true;
-                    }
-                }
-            }
-            return false
-        }
-        return self.headers.capacity() > 0;
-    }
+    
     
     fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper> {
         &mut self.mapper
@@ -783,7 +749,7 @@ pub fn build_http_request_protocol() -> ListSpec {
         .delimited_by_space()
         .build();
 
-    let mut header_placeholder_builder = new_spec_builder(Transient("header".to_string()), false);
+    let mut header_placeholder_builder = new_spec_builder(Transient("header".to_string()));
     //let mut header_placeholder_builder = header_placeholder_builder.delimited_by_newline();
 
     let header_place_holder = header_placeholder_builder
@@ -832,12 +798,12 @@ impl SpecDeserialize for BodySpec{
     async fn deserialize (
         &self,
         info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-        reader: &mut (dyn SpecRead),
+        reader: &mut (dyn SpecRead), update_info: bool,
     ) -> Result<Value, ParserError>{
         let content_length_option = info_provider.get_info(&"Content-Length".to_owned());
         let content_length_str = content_length_option.unwrap().get_string_value();
         let content_length: u32 = content_length_str.unwrap().parse().expect("Failed to parse string to u16 for content-length header");
-        NBytesSpec::new(self.spec_meta_data.get_name().clone(), content_length, self.spec_meta_data.is_optional()).deserialize(info_provider, reader).await
+        NBytesSpec::new(self.spec_meta_data.get_name().clone(), content_length, self.spec_meta_data.is_optional()).deserialize(info_provider, reader, update_info).await
     }
 }
 
@@ -865,10 +831,9 @@ impl SpecSerialize for BodySpec{
 pub fn build_http_response_protocol() -> ListSpec {
     let root_builder = new_spec_builder(
         SpecName::NoName,
-        false,
     );
 
-    let response_line_placeholder = new_spec_builder(SpecName::Transient("response_line".to_string()), false)
+    let response_line_placeholder = new_spec_builder(SpecName::Transient("response_line".to_string()))
         .inline_value_follows(Name("protocol_version".to_string()), false)
         .expect_string(NoName, false)
         .delimited_by_space()
@@ -880,7 +845,7 @@ pub fn build_http_response_protocol() -> ListSpec {
         .delimited_by_newline()
         .build();
 
-    let mut header_placeholder_builder = new_spec_builder(Name("header".to_string()), false);
+    let mut header_placeholder_builder = new_spec_builder(Name("header".to_string()));
     let header_place_holder = header_placeholder_builder
         .key_follows(Name("header_name".to_string()), false)
         .expect_string(NoName, false)

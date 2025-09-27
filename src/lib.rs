@@ -5,7 +5,7 @@ pub(crate) mod mapping_extractor{
 
 
 
-    use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, RepeatManySpec, SimpleValueSpec, Spec, SpecMapper, SpecName, SpecType, Value, ValueSpec};
+    use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, RepeatManySpec, RepeaterContext, SimpleValueSpec, Spec, SpecMapper, SpecName, SpecType, Value, ValueSpec};
 
      
 
@@ -13,12 +13,14 @@ pub(crate) mod mapping_extractor{
         fn traverse(&self, mapper: &mut Box<dyn Mapper>);
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Clone, Default, Debug)]
     pub struct DefaultMapper{
         protocol_to_spec_field_map: HashMap<String, String>,
         protocol_to_spec_template_map: HashMap<String, String>,
         spec_data_map: HashMap<String, Value>,
         mapper_context: MapperContext,
+        repeater_context_map: HashMap<String, RepeaterContext>,
+        
     }
 
    impl Default for MapperContext{
@@ -34,6 +36,7 @@ pub(crate) mod mapping_extractor{
                 protocol_to_spec_template_map: HashMap::new(),
                 spec_data_map: HashMap::new(),
                 mapper_context: MapperContext::new(),
+                repeater_context_map: HashMap::new(),
             }
         }
     }
@@ -47,6 +50,10 @@ pub(crate) mod mapping_extractor{
     fn get_mapping_data_template_mut(&mut self) -> &mut HashMap<String, String> {
         &mut self.protocol_to_spec_template_map
     }
+
+    fn get_mapping_data_template(&self) -> &HashMap<String, String> {
+        &self.protocol_to_spec_template_map
+    }
    
     fn get_mapping_data(&self) -> &HashMap<String, String> {
         &self.protocol_to_spec_field_map
@@ -55,10 +62,16 @@ pub(crate) mod mapping_extractor{
     fn get_spec_data_mut(&mut self) -> &mut HashMap<String, crate::core::Value> {
         &mut self.spec_data_map
     }
-   
-    fn get_repeater_context_mut(&mut self, context_name: String) -> &mut crate::core::RepeaterContext {
-        todo!()
+
+    fn get_spec_data(&self) -> &HashMap<String, crate::core::Value> {
+        &self.spec_data_map
     }
+
+    fn get_repeater_context_map_mut(&mut self) -> &mut HashMap<String, RepeaterContext>{
+        &mut self.repeater_context_map
+    }
+   
+    
    
     fn get_mapper_context_mut(&mut self) -> &mut crate::core::MapperContext {
         &mut self.mapper_context
@@ -66,31 +79,13 @@ pub(crate) mod mapping_extractor{
     
     fn get_mapper_context(&self) -> &MapperContext {
         &self.mapper_context
-    }
-    
-    fn get_mapping_data_template(&self) -> & HashMap<String, String> {
-        todo!()
-    }
-    
-    fn get_spec_data(&self) -> &HashMap<String, Value> {
-        todo!()
-    }
-    
-    fn get_repeater_context_map_mut(&mut self) -> &mut HashMap<String, crate::core::RepeaterContext> {
-        todo!()
-    }
+    }    
    }
 
    pub trait ToSpecType: Spec{
         fn to_spec_type(&self) ->SpecType {
-            let spec_name = self.get_meta_data().get_name();
-            match spec_name{
-                SpecName::Name(name) |
-                SpecName::Transient(name) =>
-                    SpecType::Simple(name.to_owned()),
-
-                SpecName::NoName => SpecType::Simple("Default".to_owned())
-            }
+            let spec_name = self.get_meta_data().get_name().clone();
+            SpecType::Simple(spec_name)
         }
     }
 
@@ -133,13 +128,7 @@ pub(crate) mod mapping_extractor{
    impl ToSpecType for RepeatManySpec{
         fn to_spec_type(&self) ->SpecType{
             let spec_name = self.get_meta_data().get_name();
-            match spec_name{
-                SpecName::Name(name) |
-                SpecName::Transient(name) =>
-                    SpecType::RepeatMany(name.to_owned(), self.repeat_count.clone(), 0),
-
-                SpecName::NoName => SpecType::RepeatMany("Default".to_owned(), self.repeat_count.clone(), 0),
-            }
+            SpecType::RepeatMany(spec_name.clone(), self.repeat_count.clone(), 0)
         }
     }
 
@@ -206,13 +195,13 @@ pub(crate) mod mapping_extractor{
     
     pub(crate) fn traverse_spec<S>(spec: &S, mapper: &mut Box<dyn Mapper>) where S:MappableSpec + ?Sized{
         let meta_data = spec.get_meta_data();
-            if let SpecName::Name(_) = meta_data.get_name(){
+            //if let SpecName::Name(_) = meta_data.get_name(){
                 mapper.get_mapper_context_mut().start_spec_type(spec.to_spec_type());    
                 spec.add_mapping_template(mapper);
                 mapper.get_mapper_context_mut().end_current_spec();    
-            }else{
+            /* }else{
                 spec.add_mapping_template(mapper);
-            }
+            } */
     }
 
     impl SpecTraverse for ListSpec{
@@ -229,6 +218,7 @@ pub(crate) mod mapping_extractor{
 
     impl SpecMapper for InlineKeyWithValue{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) {
+            self.0.traverse(mapper);
             let key_name = &self.1;
             let path = mapper.get_mapper_context_mut().get_current_spec_path_template();
             mapper.add_mapping_template(key_name.to_owned(), path);
@@ -246,10 +236,10 @@ pub(crate) mod mapping_extractor{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) {
             let key_name = self.get_meta_data().get_name();
             if let SpecName::Name(name) = key_name{
-                mapper.get_mapper_context_mut().start_spec_type(SpecType::Simple(key_name.into()));
+                //mapper.get_mapper_context_mut().start_spec_type(SpecType::Simple(SpecName::Name(name.to_owned())));
                 let path = mapper.get_mapper_context_mut().get_current_spec_path_template();
                 mapper.add_mapping_template(key_name.into(), path);
-                mapper.get_mapper_context_mut().end_current_spec();
+                //mapper.get_mapper_context_mut().end_current_spec();
             }
         }
     }
@@ -259,7 +249,7 @@ pub(crate) mod mapping_extractor{
             
             let key_name = self.1.get_name();
             if let SpecName::Name(name) = key_name{
-                mapper.get_mapper_context_mut().start_spec_type(SpecType::Simple(key_name.into()));
+                mapper.get_mapper_context_mut().start_spec_type(SpecType::Simple(key_name.clone()));
                 self.0.traverse(mapper);
                 mapper.get_mapper_context_mut().end_current_spec();
             }else{
@@ -271,23 +261,30 @@ pub(crate) mod mapping_extractor{
     impl SpecMapper for KeyValueSpec{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) {
 
-            
-            let path_finder =  |mapper:  &Box<dyn Mapper>| {mapper.get_mapper_context().get_current_spec_path_template()};
-            let ( key_name,  key_spec_path,) = extract_name_and_spec_path(path_finder, mapper, self.key.get_meta_data(), &self.key.0);
+            println!("keyvalue name {}, key name {}, inner keyspec name {}", self.get_meta_data().get_name(), self.key.get_meta_data().get_name(), self.key.0.get_meta_data().get_name());
+            let path_finder =  |mapper:  &Box<dyn Mapper>| {
+                mapper.get_mapper_context().get_current_spec_path_template()
+            };
+            //mapper.get_mapper_context_mut().start_spec(&self.key);
+            let ( key_name,  key_spec_path,) = extract_name_and_spec_path(path_finder, mapper, &self.key, &self.key.0);
             match (&key_name, &key_spec_path){                
                 (Some(name), Some(path)) => {
                     mapper.add_mapping_template(name.clone(), path.clone());
                 }
                 (_,_) =>{}
             }
+            //mapper.get_mapper_context_mut().end_current_spec();
 
-            let ( value_name, value_spec_path,) = extract_name_and_spec_path(path_finder, mapper, self.value.get_meta_data(), &self.value.0);
+            //mapper.get_mapper_context_mut().start_spec(&self.value);
+
+            let ( value_name, value_spec_path,) = extract_name_and_spec_path(path_finder, mapper,&self.value, &self.value.0);
             match ( &value_name,  &value_spec_path){                
                 (Some(name), Some(path)) => {
                     mapper.add_mapping_template(name.clone(), path.clone());
                 }
                 (_,_) =>{}
             }
+            //mapper.get_mapper_context_mut().end_current_spec();
 
             match (&key_spec_path, &value_spec_path){        
             (Some(key_path), Some(value_path)) => {
@@ -323,7 +320,7 @@ pub mod core {
     use crate::core::protocol_reader::ReadBytesSize;
     use crate::core::protocol_writer::PlaceHolderWrite;
     use crate::core::protocol_reader::PlaceHolderRead;
-    use crate::mapping_extractor::{SpecTraverse, ToSpecType};    
+    use crate::mapping_extractor::{DefaultMapper, SpecTraverse, ToSpecType};    
     use async_trait::async_trait;
     use derive_builder::Builder;
     use protocol_reader::ProtocolBuffReader;
@@ -335,6 +332,7 @@ pub mod core {
     
     
     use std::collections::HashMap;
+    use std::fmt::format;
     use std::marker::PhantomData;
     use std::string::ParseError;
     use std::{
@@ -381,6 +379,7 @@ pub mod core {
         SerdeError(String),
         Utf8Error(Utf8Error),
         EndOfStream,
+        NoValidListConstituents(String),
         InvalidMarker {
             line_index: usize,
             char_index: usize,
@@ -390,6 +389,15 @@ pub mod core {
         IOError {
             error: std::io::Error,
         },
+    }
+
+    impl ParserError{
+        fn is_eof(&self) -> bool{
+            match self{
+                ParserError::EndOfStream => true,
+                _ => false,
+            }
+        }
     }
 
     impl<'l> Display for ParserError {
@@ -452,6 +460,11 @@ pub mod core {
                                 f,
                                 "End of stream reached while parsing data. Expected more data to be present.",                    
                             ),
+
+                ParserError::NoValidListConstituents(name) => write!(
+                                f,
+                                "No consituent of the list spec {} has valid value", name                    
+                            ),                            
                 ParserError::InvalidMarker { line_index, char_index, message } => write!(
                     f,
                     "Invalid Marker provided during mark/reset operation at line {} char_pos {}: {}", line_index, char_index, message                       
@@ -745,7 +758,9 @@ pub mod core {
 
     pub trait InfoProvider:  Send + Sync{
         #[allow(unused)]
-        fn get_info(&self, key: &String) -> Option<&Value>;
+        fn get_info(&self, key: &String) -> Option<&Value>{
+            self.get_mapper().get_value_by_key(key)
+        }
 
         #[allow(unused)]
         fn get_info_by_spec_path(&self, spec_path: &String) -> Option<&Value>{
@@ -753,16 +768,40 @@ pub mod core {
         }
 
         #[allow(unused)]
+        fn get_key_value_info_by_spec_name(&self, key: String, spec_name: &String) -> Option<&Value>{
+            let path = self.get_mapper().get_mapping_data_template().get(spec_name);
+            if let Some(path) = path{
+                let full_path = format!("{}.{}", path, key);
+                let value_path = self.get_mapper().get_mapping_data_template().get(&full_path);
+                if let Some(value_path) = value_path{
+                    return self.get_mapper().get_spec_data().get(value_path);
+                }else {
+                    return None;
+                }
+            }else{
+                return None;
+            }
+            
+        }
+
+        /* #[allow(unused)]
         fn get_info_mut(&mut self, key: &String) -> Option<&mut Value>;
 
         #[allow(unused)]
-        fn get_keys_by_group_name(&self, name: String) -> Option<Vec<& String>>;
+        fn get_keys_by_group_name(&self, name: String) -> Option<Vec<& String>>; */
 
-        fn add_info(&mut self, key: String, value: Value);
+        fn add_info(&mut self, key: String, value: Value){
+            self.get_mapper_mut().add_simple_data(key, value);
+        }
+
+        #[allow(unused)]
+        fn add_info_by_spec_path(&mut self, key: String, key_spec_name: String, value: Value , value_spec_name: String) {
+            self.get_mapper_mut().add_to_key_value_list(key, value, key_spec_name, value_spec_name);
+        }
 
         //fn add_transient_info(&mut self, key: String, value: Value);
 
-        fn has_all_data(&self) -> bool;
+        //fn has_all_data(&self) -> bool;
 
         fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper>;
 
@@ -775,6 +814,7 @@ pub mod core {
         }
     }
 
+    #[derive(Clone, Debug)]
     pub(crate) struct RepeaterContext{
         count: u32
     }
@@ -802,11 +842,14 @@ pub mod core {
 
 
     pub trait RequestInfo: InfoProvider {
+
+        
         
     }
 
     pub trait ResponseInfo: InfoProvider {
     }
+
 
     #[allow(unused)]
     pub trait RequestFactory<REQI, REQSER, REQH, REQERRH, RESI> : Send + Sync
@@ -818,7 +861,18 @@ pub mod core {
         RESI: ResponseInfo,
     {
         fn get_request_spec(&self) -> &ListSpec;
+
+        
+
+
         fn create_request_info(&self) -> REQI;
+
+        /* fn get_default_mapper_mut(&mut self) -> &mut Box<dyn Mapper>;        
+
+        fn set_default_mapper(&mut self, mapper:Box<dyn Mapper>);        
+
+        fn get_default_mapper(&self) -> & Box<dyn Mapper>;         */
+        
         fn create_request_serializer(&self) -> REQSER;
         fn create_request_handler(&self) -> REQH;
         fn create_error_request_handler(&self) -> REQERRH;
@@ -836,7 +890,7 @@ pub mod core {
         fn create_response_info(&self) -> RESI;
         fn create_response_serializer(&self) -> RESS;
         fn create_response_handler(&self) -> RESH;
-        fn create_error_responset_handler(&self) -> RESERRH;
+        fn create_error_response_handler(&self) -> RESERRH;
     }
 
     #[async_trait]
@@ -952,8 +1006,8 @@ pub mod core {
         )  -> Result<&'a mut REQI, ParserError> 
         where B:AsyncRead + Unpin + Send + Sync  {
             let mut protocol_reader = ProtocolBuffReader::new( BufReader::new(reader), 1024);
-            let parse_result = spec.deserialize(request_info,&mut  protocol_reader).await;
-            if let Err(parser_error) = parse_result{
+            let parse_result = spec.deserialize(request_info,&mut  protocol_reader, true).await?;
+            /* if let Err(parser_error) = parse_result{
                 if let ParserError::EndOfStream = parser_error  {
                     if request_info.has_all_data() {
                         return Ok(request_info);
@@ -962,7 +1016,8 @@ pub mod core {
                 } else {
                     return Err(parser_error);
                 }
-            }
+            } */
+           //todo!("do we need the above error handling");
             Ok(request_info)
         }        
     }
@@ -1000,11 +1055,11 @@ pub mod core {
         ) -> Result<&'a mut RESI, ParserError> 
         where R:SpecRead {
             let mut protocol_reader = ProtocolBuffReader::new(reader, 1024);
-            let parse_result = spec.deserialize(response_info,&mut  protocol_reader).await;
+            let parse_result = spec.deserialize(response_info,&mut  protocol_reader, true).await?;
             /* let result = protocol_reader
             .parse_composite(&mut request_info, spec).await; */
             
-            if let Err(parser_error) = parse_result{
+            /* if let Err(parser_error) = parse_result{
                 if let ParserError::EndOfStream = parser_error  {
                     if response_info.has_all_data() {
                         return Ok(response_info);
@@ -1013,7 +1068,8 @@ pub mod core {
                 } else {
                     return Err(parser_error);
                 }
-            }
+            } */
+           //todo handle the above
             Ok(response_info)
         }        
     }
@@ -1070,6 +1126,9 @@ pub mod core {
         #[allow(unused)]
         async fn stop(&mut self) -> Result<(), ServerError>;
 
+        /* #[allow(unused)]
+        async fn configure_mappers(&mut self) -> Result<(), ServerError>; */
+
         /* async fn handle_request(&self, request: RQI) -> Result<RSI, ServerError>;
         async fn send_response(&self, response: RSI) -> Result<(), ServerError>; */
     }
@@ -1094,21 +1153,119 @@ pub mod core {
         type REQERRH: RequestErrorHandler<Self::REQI, Self::RESI>;
         type RESERRH: ResponseErrorHandler<Self::RESI>;
     }
+
+    struct MapperAwareRequestFactory<T> where T:ProtocolConfig{
+        inner: T::REQF,
+        mapper: Box<dyn Mapper>,
+    }
+
+    struct MapperAwareResponseFactory<T> where T:ProtocolConfig{
+        inner: T::RESF,
+        mapper: Box<dyn Mapper>,
+    }
+    /*
+     REQI: RequestInfo,
+        REQSER: RequestSerializer<REQI>,
+        REQH: RequestHandler<REQI, RESI>,
+        REQERRH: RequestErrorHandler<REQI, RESI>,
+        RESI: ResponseInfo,
+     */
+
+    impl <T> MapperAwareRequestFactory<T> where T: ProtocolConfig{
+        fn new(inner: T::REQF) -> Self{
+            
+            let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
+            inner.get_request_spec().traverse(&mut mapper);
+            Self { inner, mapper }
+        }
+    }
+
+    impl <T> RequestFactory<T::REQI, T::REQSER, T::REQH, T::REQERRH, T::RESI> for MapperAwareRequestFactory<T> where T: ProtocolConfig{
+        fn get_request_spec(&self) -> &ListSpec {
+            self.inner.get_request_spec()
+        }
+    
+        fn create_request_info(&self) -> T::REQI {
+            let mut request_info = self.inner.create_request_info();
+            self.mapper.get_mapping_data_template().clone_into(request_info.get_mapper_mut().get_mapping_data_template_mut());
+            request_info            
+
+        }
+    
+        fn create_request_serializer(&self) -> T::REQSER {
+            self.inner.create_request_serializer()
+        }
+    
+        fn create_request_handler(&self) -> T::REQH {
+            self.inner.create_request_handler()
+        }
+    
+        fn create_error_request_handler(&self) -> T::REQERRH {
+            self.inner.create_error_request_handler()
+        }
+    }
+
+    impl <T> MapperAwareResponseFactory<T> where T: ProtocolConfig{
+        fn new(inner: T::RESF) -> Self{
+            
+            let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
+            inner.get_response_spec().traverse(&mut mapper);
+            Self { inner, mapper }
+        }
+    }
+
+    impl <T> ResponseFactory<T::RESI, T::RESSER, T::RESH, T::RESERRH, > for MapperAwareResponseFactory<T> where T: ProtocolConfig{
+        fn get_response_spec(&self) -> &ListSpec {
+            self.inner.get_response_spec()
+        }
+    
+        fn create_response_info(&self) -> T::RESI {
+            let mut request_info = self.inner.create_response_info();
+            self.mapper.get_mapping_data_template().clone_into(request_info.get_mapper_mut().get_mapping_data_template_mut());
+            request_info            
+
+        }
+    
+        fn create_response_serializer(&self) -> T::RESSER {
+            self.inner.create_response_serializer()
+        }
+    
+        fn create_response_handler(&self) -> T::RESH {
+            self.inner.create_response_handler()
+        }
+    
+        fn create_error_response_handler(&self) -> T::RESERRH {
+            self.inner.create_error_response_handler()
+        }
+    }
     
     #[derive(Builder)]
     #[builder(pattern = "owned")]
     pub struct ServerInstance<CFG> 
     where CFG: ProtocolConfig{
         hosts: Vec<String>,
-        request_factory: CFG::REQF,
-        #[allow(unused)]
-        response_factory: CFG::RESF,
+        
+        #[builder(setter(custom))]
+        request_factory: MapperAwareRequestFactory<CFG>,
+        
+        #[builder(setter(custom))]        
+        response_factory: MapperAwareResponseFactory<CFG>,
 
         #[builder(setter(skip))]
         listeners: Vec<TcpListener>,
     }
 
-    
+    impl <CFG:ProtocolConfig> ServerInstanceBuilder<CFG>    {
+        pub fn request_factory( mut self, value: CFG::REQF) ->  Self{
+            self.request_factory = Some(MapperAwareRequestFactory::new(value));
+            self
+        }
+
+        pub fn response_factory(mut self, value: CFG::RESF) -> Self{
+            self.response_factory = Some(MapperAwareResponseFactory::new(value));
+            self
+        }
+    }
 
     
     impl <CFG> ServerInstance<CFG> 
@@ -1151,9 +1308,11 @@ pub mod core {
 
         async fn handle_connection(&'static self, mut socket: TcpStream) {
             let mut req_info = self.request_factory.create_request_info();
-            let serializer = self.request_factory.create_request_serializer();
-
+            let serializer = self.request_factory.create_request_serializer();            
             let mut res_info = self.response_factory.create_response_info();
+            
+            
+            
             let mut buf_reader  = BufReader::new(&mut socket);  
              let request_info = 
              serializer
@@ -1205,6 +1364,19 @@ pub mod core {
         async fn stop(&mut self) -> Result<(), ServerError> {
             todo!()
         }
+
+        
+        
+       /*  async fn configure_mappers(&mut self) -> Result<(), ServerError>{
+            //configure request mapper templates
+            
+
+            //configure response mapper templates
+            let mapper = self.response_factory.get_default_mapper_mut();
+            let spec = self.response_factory.get_response_spec();
+            spec.traverse(mapper);
+            Ok(())
+        } */
     }
 
     #[allow(unused)]
@@ -1272,15 +1444,15 @@ pub mod core {
         async fn deserialize (
             &self,
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
         ) -> Result<Value, ParserError>;
     }
 
-    struct SpecDeserializer<'a, S>{
+    struct SpecDeserializer<'a, S> where S: SerializableSpec{
         inner: &'a S
     }
 
-    fn begin<S>(spec:&S, mapper_context:&mut MapperContext) where S: ProtocolSpec{
+    fn begin<S>(spec:&S, mapper_context:&mut MapperContext) where S: SerializableSpec{
             let spec_type = spec.to_spec_type();
             mapper_context.start_spec_type(spec_type);
     }
@@ -1290,46 +1462,74 @@ pub mod core {
     }
 
     #[async_trait]
-    impl <'a, S> SpecDeserialize for SpecDeserializer<'a, S> where S: ProtocolSpec{
+    impl <'a, S> SpecDeserialize for SpecDeserializer<'a, S> where S:SerializableSpec{
         async fn deserialize (
             &self,
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
         ) -> Result<Value, ParserError>{            
             begin(self.inner, info_provider.get_mapper_mut().get_mapper_context_mut());
-            let value_result = self.inner.deserialize(info_provider, reader).await;
-
+            let value_result = self.inner.deserialize(info_provider, reader, update_info).await;
+            end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
+            return value_result;
             
-            if let Ok(value) = value_result{
+            /* if let Ok(value) = value_result{
                 if let SpecName::Name(_) = self.inner.get_meta_data().get_name() {
                     let context: &mut MapperContext = info_provider.get_mapper_mut().get_mapper_context_mut();
-                    let spec_name = context.get_current_spec_path();
-                    info_provider.get_mapper_mut().get_spec_data_mut().insert(spec_name, value );
+                    let spec_name = context.get_last_available_spec_name();
+                    if update_info{
+                        info_provider.get_mapper_mut().get_spec_data_mut().insert(spec_name, value );
+                    }
                     end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
                     return Ok(Value::None);
                 }else{
                     end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
                     return Ok(value);
-                }
+                } 
                 
             }else {
                 end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
                 return value_result;
-            }
+            }*/
             
             // should we clone the value instead of sending None?
             
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub enum SpecType{
-        Composite(String),
-        RepeatMany(String, RepeatCount, u16),
+        Composite(SpecName),
+        RepeatMany(SpecName, RepeatCount, u16),
         
-        Key(String),
-        Value(String),
-        Simple(String),
+        Key(SpecName),
+        Value(SpecName),
+        Simple(SpecName),
+    }
+
+    impl SpecType{
+        fn to_path_template_string(&self) ->String{
+
+            match self{
+                
+                SpecType::RepeatMany(spec_name, _, _) => format!("{}.{{}}", spec_name.to_path_string()),
+                SpecType::Composite(spec_name) | 
+                SpecType::Key(spec_name) | 
+                SpecType::Value(spec_name) |
+                SpecType::Simple(spec_name) => spec_name.to_path_string(),
+            }
+        }
+
+        fn to_path_string(&self) ->String{
+            match self{
+                SpecType::RepeatMany(name, _, current_index) => format!("{}.{}", name.to_name_string(), current_index),
+                
+                SpecType::Composite(spec_name) | 
+                SpecType::Key(spec_name) | 
+                SpecType::Value(spec_name) |
+                SpecType::Simple(spec_name) => spec_name.to_path_string(),
+            }
+        }
     }
 
     struct SpecContext{
@@ -1356,11 +1556,42 @@ pub mod core {
         data: HashMap<String, Value>
     }
 
-    #[derive(PartialEq, Clone)]
+    #[derive(PartialEq, Clone, Debug)]
     pub enum SpecName{
         NoName,
         Name(String),
-        Transient(String)
+        Transient(String),
+        Delimiter
+    }
+
+    impl Display for SpecName{
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            match self{
+                SpecName::NoName => write!(f, "{}", "noName"),
+                SpecName::Name(name) => write!(f, "{}", name),
+                SpecName::Transient(name) =>  write!(f, "transient {}", name),
+                SpecName::Delimiter =>  write!(f, "{}", "delimiter"),
+            }
+        }
+    }
+
+    impl SpecName{
+        fn to_path_string(&self) -> String{
+            match self{
+              
+                SpecName::Name(name) => name.to_owned(),
+                SpecName::Transient(name) => name.to_owned(),
+                SpecName::NoName => "NoName".to_owned(),
+                SpecName::Delimiter => "Delimiter".to_owned(),
+            }
+        }
+
+        fn is_delimiter(&self) -> bool{
+            match self{
+                SpecName::Delimiter => true,
+                _ => false
+            }
+        }
     }
 
     impl Into<String> for &SpecName{
@@ -1402,39 +1633,82 @@ pub mod core {
         }
     }
 
-    struct UndoableDeserializer<'a, S>{
+    /* struct UndoableDeserializer<'a, S> where S:SpecDeserialize {
         inner:  &'a S
+    } */
+
+   struct UndoableDeserializer<'a, S> where S: SerializableSpec{
+        inner:  SpecDeserializer<'a, S>,
     }
 
-    async fn undoable_deserialize<S>(spec: &S, info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead)) -> Result<Value, ParserError>
-        where S: ProtocolSpec{
+    async fn peek_undoable_deserialize<S>(spec: &S,  info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead), update_info: bool,) -> Result<Value, ParserError>
+        where S: SerializableSpec {           
 
+            let marker = reader.mark();
+            let result = spec.deserialize(info_provider, reader,update_info).await;            
+            match result {
+                Ok(value_type) => {
+                    reader.reset(&marker);
+                    return Ok(value_type);                    
+                }
+                Err(e) => {
+                    reader.reset(&marker);
+                    return Err(e);
+                }
+            }        
+    }
+        
+    
+
+    async fn undoable_deserialize<S>(spec: &S, info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead), update_info: bool,) -> Result<Value, ParserError>
+        where S: SerializableSpec {
+            //SpecDeserialize
         let serialier = SpecDeserializer{
             inner: spec
         };
         let undoable_serializer = UndoableDeserializer{
-                inner: &serialier,
+                inner: serialier,
         };
-        undoable_serializer.deserialize(info_provider, reader).await
-    }    
+
+        
+        //test11(undoable_serializer, info_provider, reader);
+        undoable_serializer.deserialize(info_provider, reader, update_info).await
+        
+    }
+
+     /* fn test11<S>(s:UndoableDeserializer<S>, info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead)) 
+     where S:SpecDeserialize{
+       //s.deserialize(info_provider, reader)
+    }  */
 
     #[async_trait]
-    impl <'a, T: SpecDeserialize + Send + Sync> SpecDeserialize for UndoableDeserializer<'a, T>{        
+    impl <'a, T> SpecDeserialize for UndoableDeserializer<'a, T> where T:SerializableSpec{        
         async fn deserialize (
-            &self,
+            &self,  
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
         ) -> Result<Value, ParserError>{
             let marker = reader.mark();
-            let result = self.inner.deserialize(info_provider, reader).await;            
+            let result = self.inner.deserialize(info_provider, reader,update_info).await;            
             match result {
                 Ok(value_type) => {
                     reader.unmark(&marker);
                     return Ok(value_type);                    
                 }
                 Err(e) => {
-                    reader.reset(&marker)?;
-                    return Err(e);
+                    match e{
+                        
+                        ParserError::EndOfStream => {
+                            let optional = self.inner.inner.get_meta_data().is_optional();
+                            reader.reset(&marker);
+                            return Err(e);
+                        }
+                        _ => {
+                            reader.reset(&marker);
+                            return Err(e);
+                        }
+                    }
+                    
                 }
             }
         }
@@ -1453,6 +1727,22 @@ pub mod core {
         }
     }
 
+    impl Separator{
+        fn is_delimiter(&self) -> bool{
+            match self{
+                Separator::Delimiter(_) => true,
+                _ => false,
+            }
+        }
+
+        fn get_delimiter(&self) -> Option<String>{
+            match self{
+                Separator::Delimiter(delimiter) => Some(delimiter.clone()),
+                _ => None,
+            }
+        }
+    }
+
     #[derive( PartialEq)]
     pub struct SpecMetaData{
         name: SpecName,
@@ -1466,10 +1756,12 @@ pub mod core {
 
     impl ToName for SpecName{
         fn to_name_string(&self) ->String {
-            match self{
-                SpecName::Name(name) | SpecName::Transient(name) => name.to_owned(),
-                SpecName::NoName => "Default".to_owned()
-            }
+            self.to_path_string()
+            /* match self{
+                SpecName::Name(name)  => name.to_owned(),
+                _ => "Default".to_owned(),
+                
+            } */
         }
     }
 
@@ -1507,6 +1799,7 @@ pub mod core {
 
     pub trait DelimitedSpec: SimpleValueSpec + Default{
         fn set_delimiter(&mut self, delimiter: Separator) ;
+        fn get_delimiter(& self) -> &Separator;
     }
 
     pub trait StringSpec: SimpleValueSpec + Send + Sync{}
@@ -1531,9 +1824,15 @@ pub mod core {
         fn set_delimiter(&mut self, delimiter: Separator)  {
             self.until = delimiter;
         }
+        
+        fn get_delimiter(&self) -> &Separator {
+            &self.until
+        }
+
+        
     }
 
-    #[derive(Clone, )]
+    #[derive(Clone, Debug)]
     pub(crate) enum RepeatCount{
         Fixed(u32),
         Delimited(Separator),
@@ -1571,29 +1870,76 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut dyn SpecRead,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError> {
             // Implementation for parsing repeat many spec
             let mut repeat_count = 0;
             loop{
                 info_provider.get_mapper_context().increment_current_repeat_spec();
-                self.constituents.deserialize(info_provider, reader).await?;
-                repeat_count += 1;
-                //info_provider.get_mapper().
-                if let RepeatCount::Fixed(count) = &self.repeat_count {
-                    if repeat_count >= *count {
-                        break;
-                    }
-                } else if let RepeatCount::Delimited(ref delimiter) = &self.repeat_count {
-                        let result = undoable_deserialize(&DelimitedStringSpec::new(SpecName::NoName, delimiter.clone(), false),
-                        info_provider, reader).await;
-                    if result.is_ok(){
-                        break;
-                    }
+                let result = self.constituents.deserialize(info_provider, reader, update_info).await;
+                if result.is_ok() {
+                    repeat_count += 1;
                 }
+
+                match &self.repeat_count{
+                    RepeatCount::Fixed(count) => {
+                        if result.is_err() && repeat_count < *count {
+                            return result;
+                        }
+                        if repeat_count >= *count {
+                            break;
+                        }
+                    },
+                    RepeatCount::Delimited(ref delimiter) => {
+                        match delimiter{
+                            Separator::Delimiter(delimiter) => {
+                                let spec: Box<dyn ProtocolSpec> = Box::new(ExactStringSpec::new(SpecName::Delimiter, delimiter.clone(), false));
+                                let delimiter_result = undoable_deserialize(&spec, info_provider, reader, false).await;
+                                if delimiter_result.is_ok(){
+                                    break;
+                                }else{
+                                    if result.is_err() {
+                                        return result;
+                                    }
+                                }
+                            },
+
+                            Separator::NBytes(n) => {
+                                let spec: Box<dyn ProtocolSpec> = Box::new(NumberU32Spec(SpecMetaData::new(SpecName::Delimiter, ValueType::UnSignedNumber32, false)));
+                                let number_read_result = undoable_deserialize(&spec, info_provider, reader, false).await;
+                                if number_read_result.is_ok() {
+                                    let value =  number_read_result.unwrap();
+                                    if value.get_unsigned_num_32_value().unwrap() == *n {
+                                        break;
+                                    }
+                                }else if result.is_err(){
+                                    //return the error
+                                    return result;
+                                }
+                            },
+
+                            Separator::EndOfStream => {
+                                //try to read a single byte 
+                                let spec: Box<dyn ProtocolSpec> = Box::new(NBytesSpec::new(SpecName::Delimiter, 1, false));
+                                let peek_result = peek_undoable_deserialize(
+                                    &spec, info_provider, reader, update_info).await;
+                                if peek_result.is_err(){
+                                    //check for end of stream
+                                    if peek_result.unwrap_err().is_eof(){
+                                        break;
+                                    }
+                                }else if result.is_err(){
+                                    //Not end of stream, but content of repeater result has error  
+                                    return result;
+                                }
+                            }
+                        };
+                    },
+                };
             }
             info_provider.get_mapper_context().end_current_spec();
-            Ok(Value::None) // Return appropriate value based on parsing
+            return Ok(Value::None); // Return appropriate value based on parsing
+        
         }
     }
 
@@ -1670,9 +2016,9 @@ pub mod core {
         async fn deserialize (
             &self,
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
         ) -> Result<Value, ParserError>{
-            (**self).deserialize(info_provider, reader).await
+            (**self).deserialize(info_provider, reader, update_info).await
         }
     }
 
@@ -1718,7 +2064,7 @@ pub mod core {
 
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct MapperContext{
         types: Vec<SpecType>,
     }
@@ -1760,30 +2106,53 @@ pub mod core {
         pub fn get_current_spec_path_template(&self) -> String{
             let mut spec_template = String::new();
             self.types.iter().for_each(|spec_type|{
-                spec_template = match spec_type{
-                    SpecType::Composite(name) => format!("{}.{}", spec_template,name),
-                    SpecType::RepeatMany(name,_repeat_count, _current_index) => format!("{}.{}.{{}}", spec_template,name),                    
-                    SpecType::Key(name) => format!("{}.{}", spec_template,name),
-                    SpecType::Value(name) => format!("{}.{}", spec_template,name),
-                    SpecType::Simple(name) => format!("{}.{}", spec_template,name),
-                }
+                spec_template = format!("{}.{}", spec_template,spec_type.to_path_template_string());
+                /* spec_template = match spec_type{
+                    SpecType::Composite(name) => format!("{}.{}", spec_template,name.to_path_string()),
+                    SpecType::RepeatMany(name,_repeat_count, _current_index) => format!("{}.{}.{{}}", spec_template,name.to_path_string()),                    
+                    SpecType::Key(name) => format!("{}.{}", spec_template,name.to_path_string()),
+                    SpecType::Value(name) => format!("{}.{}", spec_template,name.to_path_string()),
+                    SpecType::Simple(name) => format!("{}.{}", spec_template,name.to_path_string()),
+                } */
             });
             spec_template
         }
 
         pub fn get_current_spec_path(&self) -> String{
-            let mut spec_template = "$".to_string();
+            let mut spec_path = "$".to_string();
             self.types.iter().for_each(|spec_type|{
-                spec_template = match spec_type{
-                    SpecType::Composite(name) => format!("{}.{}", spec_template,name),
-                    SpecType::RepeatMany(name, _, current_index) => format!("{}.{}.{}", spec_template, name, current_index),
-                    
-                    SpecType::Key(name) => format!("{}.{}", spec_template,name),
-                    SpecType::Value(name) => format!("{}.{}", spec_template,name),
-                    SpecType::Simple(name) => format!("{}.{}", spec_template,name),
-                }
+                spec_path = format!("{}.{}", spec_path, spec_type.to_path_string())
             });
-            spec_template
+            spec_path
+        }
+
+        pub fn get_last_available_spec_name(&self) -> String{
+            
+            for spec_type in self.types.iter().rev(){
+                match spec_type{
+                    SpecType::Composite(name) 
+                        | SpecType::Key(name) 
+                        | SpecType::Value(name)
+                        | SpecType::Simple(name)
+                    => {
+                        match name {
+                            SpecName::Name(name) => {
+                                return name.to_owned();
+                            },
+                            _  =>  continue,
+                        }
+                    }
+                    SpecType::RepeatMany(name, _, current_index) => {
+                        match name {
+                            SpecName::Name(name) => {
+                                return name.to_owned();
+                            },
+                            _  =>  continue,
+                        }
+                    }
+                }
+            }
+            panic!("at least one SpecName::Name is expected in the list");
         }
     }
 
@@ -1799,12 +2168,28 @@ pub mod core {
         qualified_name.replace(format!(".{}",  lookup_name).as_str(), "")
     }
 
-    pub(crate) trait Mapper:  Send + Sync {
+    pub(crate) trait Mapper:  Send + Sync + Debug{
 
-            fn get_value_by_key(&self, spec_name: &str) -> Option<&Value>{
+        fn get_value_by_key(&self, spec_name: &str) -> Option<&Value>{
             let value_path = self.get_mapping_data_template().get(spec_name);
             if let Some(value_path) = value_path{
                 self.get_spec_data().get(value_path)
+            }else{
+                None
+            }
+        }
+
+        fn get_value_from_key_value_list(&self,key: String, spec_name: &str) -> Option<&Value>{
+            let spec_path = self.get_mapping_data_template().get(spec_name);
+
+            if let Some(spec_path) = spec_path{
+                let key_quick_lookup_name = format!("{}.{}", spec_path, key);
+                let value_path = self.get_mapping_data().get(&key_quick_lookup_name);
+                if let Some(value_path) = value_path{
+                    self.get_spec_data().get(value_path)
+                }else{
+                    return None;
+                }
             }else{
                 None
             }
@@ -1884,7 +2269,7 @@ pub mod core {
             let key_quick_lookup_name = format!("{}.{}", key_spec_name, key);
 
             // Map key to value spec name for quick lookup of value e.g. headers.0.HeaderName.Content-Type -> headers.0.HeaderValue
-            self.get_mapping_data_mut().insert(key_quick_lookup_name, value_spec_name);
+            self.get_mapping_data_template_mut().insert(key_quick_lookup_name, value_spec_name);
 
             Ok(())
         }
@@ -1939,22 +2324,13 @@ pub mod core {
         }
     }
 
-    #[async_trait]
-    impl SpecDeserialize for DelimitedStringSpec
-    {
-        async fn deserialize(
-            &self,
-            info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut dyn SpecRead,
-        ) -> Result<Value, ParserError>      
-        {
-            //let mut buf = vec![];
-             let value = match self.until {
+    async fn parse_delimited_string_spec<D:DelimitedSpec>(spec: &D, reader: &mut dyn SpecRead,) -> Result<Value, ParserError>{
+        let value = match spec.get_delimiter() {
                 Separator::Delimiter(ref delimiter) => {
                     reader.read_placeholder_until(delimiter.to_owned()).await?
                 }
                 Separator::NBytes(size) => {
-                    reader.read_bytes( ReadBytesSize::Fixed(size)).await?
+                    reader.read_bytes( ReadBytesSize::Fixed(*size)).await?
                 }
                 Separator::EndOfStream => {
                     reader.read_bytes(ReadBytesSize::Full).await?
@@ -1962,14 +2338,32 @@ pub mod core {
             };
 
             if let Some(value) = value {
-                info_provider.add_info(self.spec_meta_data.name.to_name_string(), Value::U8Vec(value.clone()));
-                return Ok(ValueType::parse(&self.get_meta_data().value_type, &value));
+                return Ok(ValueType::parse(&spec.get_meta_data().value_type, &value));
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read value for placeholder: {:?}",
-                    self.get_meta_data().name.to_name_string()
+                    spec.get_meta_data().name.to_name_string()
                 )))
             }
+    }
+
+    #[async_trait]
+    impl SpecDeserialize for DelimitedStringSpec
+    {
+        async fn deserialize(
+            &self,
+            info_provider: &mut (dyn InfoProvider + Send + Sync),
+            reader: &mut dyn SpecRead, update_info: bool,
+        ) -> Result<Value, ParserError>      
+        {
+            //let mut buf = vec![];
+             let value = parse_delimited_string_spec(self, reader).await?;
+             if update_info{
+                let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                info_provider.add_info(spec_name, value.clone());
+                return Ok(Value::None);
+             }
+             Ok(value)
         }
     }
 
@@ -2025,12 +2419,15 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut dyn SpecRead,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError>
         {
             let value = reader.read_placeholder_as_string(self.input.clone()).await?;
             if let Some(value) = value {
-                info_provider.add_info(self.spec_meta_data.name.to_name_string(), Value::U8Vec(value.clone()));
+                if update_info && !self.spec_meta_data.get_name().is_delimiter() {
+                    let name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(name, ValueType::parse(&self.get_meta_data().value_type, &value));
+                }
                 return Ok(ValueType::parse(&self.get_meta_data().value_type, &value));
             } else {
                 Err(ParserError::MissingValue(format!(
@@ -2075,30 +2472,27 @@ pub mod core {
         }
     }
 
-    pub(crate) fn extract_name_and_spec_path<F> (
+    pub(crate) fn extract_name_and_spec_path<F, S> (
         spec_path_finder: F,
-        mapper: &mut Box<dyn Mapper>, spec_meta_data: &SpecMetaData, inner_spec: &Box<dyn ProtocolSpec> ) -> (Option<String>, Option<String>)
-        where F: Fn(&Box<dyn Mapper>) -> String
+        mapper: &mut Box<dyn Mapper>, spec: &S, inner_spec: &Box<dyn ProtocolSpec> ) -> (Option<String>, Option<String>)
+        where F: Fn(&Box<dyn Mapper>) -> String,
+        S: ProtocolSpec,
         {
         
         let (mut spec_name, mut spec_path): (Option<String>, Option<String>) = (None, None);
 
-        if let SpecName::Name(name) = spec_meta_data.get_name(){
+        /* if let SpecName::Name(name) = spec_meta_data.get_name(){
             spec_name = Some(name.clone());
-            mapper.get_mapper_context_mut().start_spec_type(inner_spec.to_spec_type());
-        }
-        if let SpecName::Name(name) = inner_spec.get_meta_data().get_name(){
-            spec_name = Some(name.clone());
-            mapper.get_mapper_context_mut().start_spec_type(inner_spec.to_spec_type());
-            spec_path = Some(
+            
+        } */
+       mapper.get_mapper_context_mut().start_spec_type(spec.to_spec_type());
+        mapper.get_mapper_context_mut().start_spec_type(inner_spec.to_spec_type());
+        spec_name = Some(mapper.get_mapper_context().get_last_available_spec_name());
+        spec_path = Some(
                 spec_path_finder(mapper)                
             );
-            //mapper.get_mapper_context().get_current_spec_path_template()
-            mapper.get_mapper_context_mut().end_current_spec();    
-        }else{                    
-            spec_path = Some(spec_path_finder(mapper));
-            mapper.get_mapper_context_mut().end_current_spec();                
-        }
+        mapper.get_mapper_context_mut().end_current_spec();
+        mapper.get_mapper_context_mut().end_current_spec();
         return (spec_name, spec_path)
     }
 
@@ -2150,30 +2544,26 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
             
         ) -> Result<Value, ParserError>
         {
-            let mapper = info_provider.get_mapper_mut();
+            
             
             let path_finder =  |mapper:  &Box<dyn Mapper>| {mapper.get_mapper_context().get_current_spec_path()};
-
-            let ( key_spec_name,  key_spec_path,) = extract_name_and_spec_path(path_finder, mapper, self.key.get_meta_data(), &self.key.0);
-            let ( value_spec_name,  value_spec_path,) = extract_name_and_spec_path(path_finder,mapper, self.value.get_meta_data(), &self.value.0);
-
-
+            
+            
+            let ( key_spec_name,  key_spec_path,) = extract_name_and_spec_path(path_finder, info_provider.get_mapper_mut(), &self.key, &self.key.0);
             
 
-            let key_name = undoable_deserialize(&self.key, info_provider, reader).await?;
-            let value = undoable_deserialize(&self.value, info_provider, reader).await?;
-            /* if let Some(ref key_spec_path) = key_spec_path {
-                info_provider.get_mapper_mut().get_spec_data_mut().insert(key_spec_path.clone(), key_name);
-            }
+            let key_name = undoable_deserialize(&self.key, info_provider, reader, false).await?;
 
-            if let Some(ref value_spec_path) = value_spec_path {
-                info_provider.get_mapper_mut().get_spec_data_mut().insert(value_spec_path.clone(), value);
-            } */
+            
+            let ( value_spec_name,  value_spec_path,) = extract_name_and_spec_path(path_finder,info_provider.get_mapper_mut(), &self.value, &self.value.0);
+            
 
+            let value = undoable_deserialize(&self.value, info_provider, reader, false).await?;
+            
             match (key_spec_path, value_spec_path){
                 (None, None) => {},
                 (None, Some(ref value_spec_path)) => {
@@ -2183,14 +2573,18 @@ pub mod core {
                     info_provider.get_mapper_mut().get_spec_data_mut().insert(key_spec_path.clone(), key_name);
                 },
                 (Some(ref key_spec_path), Some(ref value_spec_path)) => {
-                    let key_spec_template = info_provider.get_mapper_mut().get_mapping_data_template().get(&key_spec_name.unwrap()).unwrap();
+                    if update_info{
+                        info_provider.get_mapper_mut().add_to_key_value_list(key_name.get_string_value_unchecked().unwrap(),
+                            value, key_spec_name.unwrap(), value_spec_name.unwrap());
+                    }
+                    /* let key_spec_template = info_provider.get_mapper_mut().get_mapping_data_template().get(&key_spec_name.unwrap()).unwrap();
 
-                    let key_spec_template_path = format!("{}.{}", key_spec_template, key_name.get_string_value_unchecked().unwrap());
+                    let key_spec_template_path = format!("{}.{}", key_spec_template, );
                     info_provider.get_mapper_mut().get_spec_data_mut().insert(value_spec_path.clone(), value);
                     info_provider.get_mapper_mut().get_spec_data_mut().insert(key_spec_path.clone(), key_name);
                     info_provider.get_mapper_mut().get_mapping_data_mut().insert(key_spec_path.clone(), value_spec_path.clone());
                     info_provider.get_mapper_mut().get_mapping_data_mut().insert(key_spec_path.clone(), value_spec_path.clone());
-                    info_provider.get_mapper_mut().get_mapping_data_mut().insert(key_spec_template_path, value_spec_path.clone());
+                    info_provider.get_mapper_mut().get_mapping_data_mut().insert(key_spec_template_path, value_spec_path.clone()); */
                 },
             }
             
@@ -2225,12 +2619,15 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
         ) -> Result<Value, ParserError>
         {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(self.size)).await?;
             if let Some(bytes) = bytes {
-                info_provider.add_info(self.spec_meta_data.name.to_name_string(), Value::U8Vec(bytes.clone()));
+                if update_info {
+                    let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(spec_name, Value::U8Vec(bytes.clone()));
+                }
                 return Ok(ValueType::parse(&self.get_meta_data().value_type, &bytes));
             } else {
                 Err(ParserError::MissingValue(format!(
@@ -2277,12 +2674,16 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),            
+            reader: &mut (dyn SpecRead), update_info: bool,   
         ) -> Result<Value, ParserError>
         {
             let bytes = reader.read_bytes(ReadBytesSize::Full).await?;
             if let Some(bytes) = bytes {
-                info_provider.add_info(self.spec_meta_data.name.to_name_string(), Value::U8Vec(bytes.clone()));
+                if update_info{
+                    let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(spec_name, Value::U8Vec(bytes.clone()));
+                    return Ok(Value::None)
+                }
                 return Ok(ValueType::parse(&self.get_meta_data().get_value_type(), &bytes));
             } else {
                 Err(ParserError::MissingValue(format!(
@@ -2322,6 +2723,10 @@ pub mod core {
         fn set_delimiter(&mut self, delimiter: Separator)  {
             self.until = delimiter;
         }
+        
+        fn get_delimiter(& self) -> &Separator {
+            &self.until
+        }
     }
 
     impl Spec for OneOfSpec{
@@ -2357,18 +2762,20 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
         ) -> Result<Value, ParserError>
         {
-            let spec = DelimitedStringSpec::new(
-                self.get_meta_data().get_name().to_owned(),
-                self.until.clone(),
-                self.get_meta_data().is_optional());
-                let result = undoable_deserialize(&spec, info_provider, reader).await?;
+            let result = parse_delimited_string_spec(self, reader).await?;
+            
                 //.undoable_parse(info_provider, reader).await?;
             if let Some(value) = &result.get_string_value() {
                 if self.values.contains(value) {
-                info_provider.add_info(self.spec_meta_data.name.to_name_string(), Value::String(value.clone()));
+                    if update_info{
+                        let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                        info_provider.add_info(spec_name, Value::String(value.clone()));
+                        return Ok(Value::None);
+                    }
+                    
                 return Ok(result);
                 } else {
                     return Err(ParserError::MissingValue(format!(
@@ -2418,11 +2825,32 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),            
+            reader: &mut (dyn SpecRead), update_info: bool,            
         ) -> Result<Value, ParserError>
         {
+            let mut has_one_success = false;
             for constituent in &self.constituents {   
-                undoable_deserialize(constituent, info_provider, reader).await?;
+                let result = undoable_deserialize(constituent, info_provider, reader, update_info).await;
+                println!("deserializing {}", constituent.get_meta_data().get_name());
+                match result{
+                    Ok(_) => {
+                        has_one_success = true;
+                        continue;
+                    },
+                    Err(ref e) => {
+                        println!("{} is optional? {}, {}", constituent.get_meta_data().get_name(), constituent.get_meta_data().is_optional(),e);
+                        has_one_success = has_one_success | false;
+                        if constituent.get_meta_data().is_optional() {
+                            continue;
+                        }else{
+                            return result;
+                        }
+                    },
+                }
+            }
+
+            if !has_one_success {
+                return Err(ParserError::NoValidListConstituents(self.get_meta_data().get_name().to_path_string()));
             }
             Ok(Value::None) // or some other appropriate return value
         }
@@ -2540,10 +2968,10 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),            
+            reader: &mut (dyn SpecRead), update_info: bool,         
         ) -> Result<Value, ParserError>
         {
-            undoable_deserialize(&self.0, info_provider, reader).await
+            undoable_deserialize(&self.0, info_provider, reader,update_info).await
         }
     }
 
@@ -2553,12 +2981,17 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),            
+            reader: &mut (dyn SpecRead), update_info: bool,            
         ) -> Result<Value, ParserError>
         {
-            undoable_deserialize(&self.0, info_provider, reader).await.map(|value| {
-                info_provider.add_info(self.1.clone(), value);
-                Value::None // or some other appropriate return value
+            undoable_deserialize(&self.0, info_provider, reader, update_info).await.map(|value| {
+                if update_info{
+                    //let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    //info_provider.add_info(spec_name, value.clone());
+                    return Value::None;
+                }else {
+                    return value;
+                }
             })
         }
     }
@@ -2568,10 +3001,10 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),            
+            reader: &mut (dyn SpecRead), update_info: bool,           
         ) -> Result<Value, ParserError>
         {
-            undoable_deserialize(&self.0, info_provider, reader).await
+            undoable_deserialize(&self.0, info_provider, reader, update_info).await
         }
     }
 
@@ -2681,11 +3114,17 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool,
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(8)).await?;
             if let Some(bytes) = bytes {
-                Ok(ValueType::parse(&ValueType::UnSignedNumber64, &bytes))
+                if update_info{
+                    let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber64, &bytes));
+                    return Ok(Value::None);
+                }else {
+                    Ok(ValueType::parse(&ValueType::UnSignedNumber64, &bytes))
+                }
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read 8 bytes for placeholder: {:?}",
@@ -2700,11 +3139,17 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(8)).await?;
             if let Some(bytes) = bytes {
-                Ok(ValueType::parse(&ValueType::SignedNumber64, &bytes))
+                if update_info{
+                    let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(spec_name, ValueType::parse(&ValueType::SignedNumber64, &bytes));
+                    return Ok(Value::None);
+                }else {
+                    Ok(ValueType::parse(&ValueType::SignedNumber64, &bytes))
+                }
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read 8 bytes for placeholder: {:?}",
@@ -2719,11 +3164,17 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(4)).await?;
             if let Some(bytes) = bytes {
-                Ok(ValueType::parse(&ValueType::UnSignedNumber32, &bytes))
+                if update_info{
+                    let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber32, &bytes));
+                    return Ok(Value::None);
+                }else {
+                    Ok(ValueType::parse(&ValueType::UnSignedNumber32, &bytes))
+                }
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read 8 bytes for placeholder: {:?}",
@@ -2738,11 +3189,17 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(4)).await?;
             if let Some(bytes) = bytes {
-                Ok(ValueType::parse(&ValueType::UnSignedNumber16, &bytes))
+                if update_info{
+                    let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber16, &bytes));
+                    return Ok(Value::None);
+                }else {
+                    Ok(ValueType::parse(&ValueType::UnSignedNumber16, &bytes))
+                }
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read 8 bytes for placeholder: {:?}",
@@ -2757,11 +3214,17 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead),
+            reader: &mut (dyn SpecRead), update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(4)).await?;
             if let Some(bytes) = bytes {
-                Ok(ValueType::parse(&ValueType::SignedNumber16, &bytes))
+                if update_info{
+                    let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
+                    info_provider.add_info(spec_name, ValueType::parse(&ValueType::SignedNumber16, &bytes));
+                    return Ok(Value::None);
+                }else {
+                    Ok(ValueType::parse(&ValueType::SignedNumber16, &bytes))
+                }
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read 8 bytes for placeholder: {:?}",
@@ -3002,8 +3465,8 @@ pub mod core {
         }
     }
 
-    pub fn new_spec_builder(name: SpecName, optional:bool)-> ProtoSpecBuilderData<BuildFromScratch>{
-        ProtoSpecBuilderData::<BuildFromScratch>::new_with(name, optional)
+    pub fn new_spec_builder(name: SpecName)-> ProtoSpecBuilderData<BuildFromScratch>{
+        ProtoSpecBuilderData::<BuildFromScratch>::new_with(name, false)
     }
 
     impl <S> ProtoSpecBuilderData<S> where S:BuilderState {
@@ -3321,7 +3784,7 @@ pub mod core {
             //OB: ProtoSpecBuilder<OBS> + 'static,
             OBS: BuilderState +  'static,
             ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, ExactStringSpec, IBS>> + 'static,{
-                self.expect_exact_string(SpecName::NoName, "\r\n".to_string(), false)
+                self.expect_exact_string(SpecName::Delimiter, "\r\n".to_string(), false)
             }
 
         fn expect_space(self,) -> ProtoSpecBuilderData<OBS> 
@@ -3330,7 +3793,7 @@ pub mod core {
             //OB: ProtoSpecBuilder<OBS> + 'static,
             OBS: BuilderState +  'static,
             ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, ExactStringSpec, IBS>> + 'static,{
-                self.expect_exact_string(SpecName::NoName, " ".to_string(), false)
+                self.expect_exact_string(SpecName::Delimiter, " ".to_string(), false)
             }
     }
 
@@ -3440,6 +3903,7 @@ pub mod core {
     where
         B:ProtoSpecBuilder<BS> + 'static, 
         BS:BuilderState + 'static;
+    
     struct BuilderWrapper<B,BS>(B , PhantomData<BS> ) where B:ProtoSpecBuilder<BS> + 'static, BS:BuilderState + 'static;
 
      impl <D, IBS> From<BuilderWrapperWithData<ProtoSpecBuilderData<IBS>, D, IBS>> for ProtoSpecBuilderData<IBS> 
@@ -3574,7 +4038,7 @@ pub mod core {
             let key_value = KeyValueSpec::new(
                 from_state.key,
                 ValueSpec(Box::new(value.1), from_state.value_spec_metadata),
-                SpecMetaData::new(SpecName::Name("key-value-spec".to_owned()), ValueType::None, optional),
+                SpecMetaData::new(SpecName::Transient("key-value-spec".to_owned()), ValueType::None, optional),
             );
             from_builder.add_spec(Box::new(key_value));
             result.set_state(BuildFromScratch{});
@@ -3615,11 +4079,28 @@ pub mod core {
             let mut result = ProtoSpecBuilderData::default();
             let optional = from_state.parent_builder_state.value_spec_metadata.optional;
             from_state.delimiter_spec.set_delimiter(Separator::Delimiter(value.1));
-            let inline_key_value = InlineKeyWithValue(Box::new(from_state.delimiter_spec), from_state.         parent_builder_state.key_name, from_state.parent_builder_state.value_spec_metadata);
+            let inline_key_value = InlineKeyWithValue(Box::new(from_state.delimiter_spec), from_state.parent_builder_state.key_name, from_state.parent_builder_state.value_spec_metadata);
             from_builder.add_spec(Box::new(inline_key_value));
             result.set_state(BuildFromScratch{});
             result.set_spec(from_builder.build());    
             result
+        }
+    }
+
+    impl  From<BuilderWrapperWithData<ProtoSpecBuilderData<BuildInlineValue>, ExactStringSpec, BuildInlineValue>>  for ProtoSpecBuilderData<BuildFromScratch>{
+        
+        fn from(value: BuilderWrapperWithData<ProtoSpecBuilderData<BuildInlineValue>, ExactStringSpec, BuildInlineValue>) -> Self {
+            let mut from_builder = value.0;
+            let mut from_state = from_builder.replace_current_state_with_default();
+            let mut result = ProtoSpecBuilderData::default();
+            let optional = from_state.value_spec_metadata.optional;
+            let spec = value.1;
+            let inline_key_value = InlineKeyWithValue(Box::new(spec), from_state.key_name, from_state.value_spec_metadata);
+            from_builder.add_spec(Box::new(inline_key_value));
+            result.set_state(BuildFromScratch{});
+            result.set_spec(from_builder.build());    
+            result
+            
         }
     }
 
@@ -3676,7 +4157,7 @@ pub mod core {
         where 
         ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, String, BuildDelimiter<D, IBS>>>,
         {
-            let r = self.wrap_with_data(delimiter);
+            let r: BuilderWrapperWithData<Self, String, BuildDelimiter<D, IBS>> = self.wrap_with_data(delimiter);
             r.into()
         }
     }
@@ -3726,7 +4207,7 @@ mod tests {
 mod test_utils {
     use std::collections::HashMap;
 
-    use crate::{core::{InfoProvider, Value}, mapping_extractor::DefaultMapper};
+    use crate::{core::{InfoProvider, Mapper, RequestInfo, Value}, mapping_extractor::DefaultMapper};
 
     pub fn assert_result_has_string(
         result: Result<Option<Vec<u8>>, crate::core::ParserError>,
@@ -3746,64 +4227,57 @@ mod test_utils {
         }
     }
 
-    #[derive(Default)]
-    pub struct TestRequestInfo(HashMap<String, Value>, HashMap<String, Value>, HashMap<String, HashMap<String, Value>>, DefaultMapper);
+    //#[derive(Default)]
+    #[derive(Debug)]
+    pub struct TestRequestInfo(pub Box<dyn Mapper>, Vec<String>);
 
     impl TestRequestInfo {
         pub fn new() -> Self {
-            TestRequestInfo(HashMap::new(), HashMap::new(), HashMap::new(), DefaultMapper::new())
+            TestRequestInfo( Box::new(DefaultMapper::new()), Vec::new())
+        }
+
+        pub fn add_simple_keys(&mut self, mut keys:Vec<String>){
+            self.1.append(&mut keys);
         }
     }
 
+    impl RequestInfo for TestRequestInfo{}
+
     impl InfoProvider for TestRequestInfo {
+        /* fn get_info(&self, key: &String) -> Option<&Value> {
+            let key_ref = key.as_str();
+            if self.1.contains(key) {
+                return self.1
+            }
+            else{
+                if let Some(spec_name) = spec_name{
+                    return self.get_mapper().get_value_from_key_value_list(key_ref, &spec_name).clone();
+                }
+            }
+
+
+        }
+
         fn add_info(&mut self, key: String, value: Value) {
-            self.0.insert(key, value);
-        }
-
-        fn get_info(&self, key: &String) -> Option<&crate::core::Value> {
-            if let Some(value) = self.0.get(key) {
-                Some(value)
-            }else if let Some(value) = self.1.get(key){
-                Some(value)
+            match key.as_str() {
+                "request_method" | "protocol_version" | "request_uri" | "request_body" => {
+                    self.get_mapper_mut().add_simple_data(key, value);
+                }
+                _ => {
+                    //self.headers.insert(key.to_string(), value);
+                    self.get_mapper_mut().add_to_key_value_list(key, value, "header-name".to_string(), "header-value".to_string());
+                }
             }
-            else {
-                None
-            }
-        }
-
-        fn get_keys_by_group_name(&self, _name: String) -> Option<Vec<&String>> {
-            let mut keys = Vec::new();
-            for (key, _value) in &self.0 {
-                keys.push(key);
-            }
-            if keys.is_empty() {
-                None
-            } else {
-                Some(keys)
-            }
-        }
-
-        fn get_info_mut(&mut self, key: &String) -> Option<&mut Value> {
-            if let Some(value) = self.0.get_mut(key) {
-                Some(value)
-            }else if let Some(value) = self.1.get_mut(key){
-                Some(value)
-            }
-            else {
-                None
-            }
-        }
-        
-        fn has_all_data(&self) -> bool {
-            todo!()
-        }
+        }     */
         
         fn get_mapper_mut(&mut self) ->&mut Box<dyn crate::core::Mapper> {
-            todo!()
+            &mut self.0
         }
         
         fn get_mapper(&self) ->&Box<dyn crate::core::Mapper> {
-            todo!()
+            &self.0
         }
+        
+        
     }
 }

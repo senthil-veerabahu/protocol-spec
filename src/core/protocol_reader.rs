@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use memchr::memmem::Finder;
 use pin_project::pin_project;
 use std::{
-     fmt::{Display}, future::Future, io::{self}, pin::Pin, task::{Context, Poll}, time::Duration
+     fmt::Display, future::Future, io::{self, ErrorKind}, pin::Pin, task::{Context, Poll}, time::Duration
 };
 use tokio::{io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, ReadBuf}, time::timeout};
 use tokio_stream::Stream;
@@ -23,7 +23,7 @@ where
         
         if self.buff_reader.pos < self.buff_reader.buf.len() {
             let value = self.buff_reader.buf[self.buff_reader.pos];
-            self.buff_reader.consume(1);
+            self.buff_reader.consume_and_drain(1);
             return Poll::Ready(Some(Ok(value)));
         } else {
             match self.buff_reader.fill_buffer(cx) {
@@ -270,6 +270,10 @@ impl <R>ProtocolBuffReader<R>
         let mut len = 0;
         let result = match result {
             Poll::Ready(Ok(buf)) => {
+
+                if buf.is_empty() {
+                    return Poll::Ready(Err(io::Error::new(ErrorKind::UnexpectedEof, "End Of file reached")));
+                }
                 println!("len {}, cap {}", self.buf.len(), self.cap);
                 self.buf.extend_from_slice(buf);
                 len = buf.len();
@@ -283,6 +287,15 @@ impl <R>ProtocolBuffReader<R>
         }
         return result;
     }
+    
+    fn consume_and_drain(&mut self, amount: usize) {
+        if self.pos >= self.buf.len() / 2 && !self.marked {
+            self.buf.drain(0..self.pos + amount);
+            self.pos = 0;
+        } else {
+            self.pos += amount;
+        }
+    }
 
     #[allow(unused)]
     fn get_buf_unread_size(&self) -> usize {
@@ -290,7 +303,7 @@ impl <R>ProtocolBuffReader<R>
     }
 
     fn buf_has_enough_data(&self, bytes_size: &ReadBytesSize) -> bool {
-            (self.buf.len() - self.pos + 1) as u32 >= bytes_size.get_value()
+        (self.buf.len() - self.pos + 1) as u32 >= bytes_size.get_value()
     }
 
     #[allow(unused)]
@@ -408,8 +421,18 @@ where
     ) -> Self {
         ReadBytes {
             protocol_reader,
-        
             size,
+        }
+    }
+}
+
+fn convert_io_error(error: std::io::Error) -> ParserError{
+    match error.kind(){
+        ErrorKind::UnexpectedEof => {
+            return ParserError::EndOfStream;
+        },
+        _ => {
+            return ParserError::IOError { error: error };
         }
     }
 }
@@ -447,7 +470,7 @@ where
                         }
                     }
                     Poll::Ready(Err(e)) => {
-                        return Poll::Ready(Err(ParserError::IOError { error: e }));
+                        return Poll::Ready(Err(convert_io_error(e)));
                     }
                 };
             }
@@ -525,15 +548,16 @@ where
                     Poll::Ready(result) => match result {
                         Ok(index) => {
                             let matched_portion =
-                                &protocol_reader.get_buffer()[protocol_reader.pos..index];
+                                protocol_reader.get_buffer()[protocol_reader.pos..index].to_vec();
+                            protocol_reader.consume_and_drain(matched_portion.len() + delimiter.len());                                
                             /* let place_holder_value = PlaceHolderValue::parse(
                                 &placeholder.place_holder_type,
                                 matched_portion,
                             ); */
 
-                            //protocol_reader.consume(matched_portion.len() + delimiter.len());
+                            
                             //protocol_reader.unmark_if_optional(placeholder);
-                            return Poll::Ready(Ok(Some(matched_portion.to_vec())));
+                            return Poll::Ready(Ok(Some(matched_portion)));
                         }
                         Err(e) => {
                             //protocol_reader.reset_if_optional(placeholder);
@@ -597,15 +621,15 @@ where
                 Poll::Ready(result) => match result {
                     Ok(index) => {
                         let matched_portion =
-                            &protocol_reader.get_buffer()[index..index + input.len()];
+                            protocol_reader.get_buffer()[index..index + input.len()].to_vec();
                         /* let place_holder_value = PlaceHolderValue::parse(
                             &placeholder.place_holder_type,
                             matched_portion,
-                        );
+                        );*/
 
-                        protocol_reader.consume(input.len());
-                        protocol_reader.unmark_if_optional(placeholder); */
-                        return Poll::Ready(Ok(Some(matched_portion.to_vec())));
+                        protocol_reader.consume_and_drain(input.len());
+                        //protocol_reader.unmark_if_optional(placeholder);
+                        return Poll::Ready(Ok(Some(matched_portion)));
                     }
                     Err(e) => {
                         /* protocol_reader.reset_if_optional(placeholder);
@@ -697,21 +721,18 @@ where
                     if read_length > 0 {
                         continue;
                     } else {
-                        return Some(Poll::Ready(Err(ParserError::TokenExpected {
-                            line_index: protocol_reader.line_index,
-                            char_index: protocol_reader.char_index_in_line,
-                            message: "Expected token not found, EOF reached".to_string(),
-                        })));
+                        return Some(Poll::Ready(Err(ParserError::EndOfStream)));
                     }
                 }
                 Poll::Pending => return Some(Poll::Pending),
                 Poll::Ready(Err(e)) => {
-                    return Some(Poll::Ready(Err(ParserError::IOError { error: e })));
+                    return Some(Poll::Ready(Err(convert_io_error(e))));
                 }
             };
         }
         let buf = protocol_reader.get_buffer();
         let pos = protocol_reader.pos;
+        println!("pos is {}", pos);
         println!("input get bytes {:?}, len {}", input.as_bytes(), input.as_bytes().len());
         println!("buf  get byets {:?}, len {}", &buf[pos..pos + input.len()], &buf[pos..pos + input.len()].len());
         if &buf[pos..pos + input.len()] == input.as_bytes() {
@@ -802,262 +823,7 @@ fn is_eof_error(parse_error: &ParserError) -> bool {
 impl<R> ProtocolBuffReader<R>
 where
     R: AsyncBufRead + Send + Sync + Unpin,
-{
-    /* #[allow(unused)]
-    async fn parse<'a, I>(&mut self, placeholder: &Placeholder, request_info:&mut I) -> Result<PlaceHolderValue, ParserError> where I:RequestInfo<'a>{
-        match placeholder.place_holder_type {
-            PlaceHolderType::Composite => {
-                self.parse_composite(placeholder,request_info).await?;
-                todo!()
-            }
-            _ => {
-                todo!()
-            }
-        }
-    } */
-
-   /* pub fn mark_if_optional(&mut self, placeholder: &Placeholder){
-        if placeholder.optional {
-            self.mark();
-        }
-   }
-
-   pub fn reset_if_optional(&mut self, placeholder: &Placeholder){
-        if placeholder.optional {
-            self.reset();
-        }
-    }
-
-    pub fn unmark_if_optional(&mut self, placeholder: &Placeholder){
-        if placeholder.optional {
-            self.unmark();
-        }
-    } */
-
-
-    #[allow(unused)]
-    /* pub(super) async fn parse_composite<RI>(
-        &mut self,
-        request_info: &mut RI,
-        placeholder: &Placeholder,
-        
-    ) -> Result<(), ParserError>
-    where
-        RI: InfoProvider,
-    {
-        match &placeholder.constituents {
-            None => {
-                panic!("Constituents not found for composite type");
-            }
-            Some(constituents) => {
-                //for i in 0..constituents.len() {
-                let mut i = 0;
-                let mut key: Option<String> = None;
-                loop {
-                    let mut value: Option<String> = None;
-                    if i >= constituents.len() {
-                        break;
-                    }
-                    let constituent = &constituents[i];
-                    match &constituent.place_holder_type {
-                        PlaceHolderType::Composite => {
-                                                Box::pin(self.parse_composite( request_info, constituent,)).await?;
-                                            }
-                        PlaceHolderType::RepeatN(n) => {
-                                                Box::pin(self.parse_composite(request_info, constituent, )).await?;
-                                            }
-                        PlaceHolderType::RepeatMany => {
-                                                let mut count = 0;
-                                                let header_name = match &constituent.name {
-                                                    crate::core::PlaceHolderIdentifier::Name(name) => {
-                                                        Some(name.to_owned())    
-                                                    }
-                                
-                                                    _ => None,
-                                                };
-                                                loop {
-                                                    self.mark();
-                                                    let result =
-                                                        Box::pin(self.parse_composite(request_info, constituent, )).await;
-                                                    if result.is_err() && is_eof_error(result.as_ref().err().unwrap()) {
-                                                        if count > 0 {
-                                                            self.reset();
-                                        
-                                                            break;
-                                                        } else {
-                                                            return result;
-                                                        }
-                                                    } else if result.is_err()
-                                                        && !is_eof_error(result.as_ref().err().unwrap())
-                                                    {
-                                                        if count > 0 {
-                                                            self.reset();
-                                                            break;
-                                                        } else {
-                                                            return result;
-                                                        }
-                                                    } else if result.is_ok() {
-                                                        count += 1;
-                                                        self.unmark();
-                                                    }
-                                                }
-                                            }
-                        PlaceHolderType::ExactString(input) => {
-                                                //self.mark_if_optional(constituent);
-                                                let value_type = self
-                                                    .read_placeholder_as_string(constituent, input.to_string())
-                                                    .await;
-                                                /* if value_type.is_err() {
-                                self.reset_if_optional(placeholder);
-                            }else */{
-                                                    match value_type {
-                                                        Ok(Some(v)) => {
-                                                            self.increment_char_index_by(input.len());
-                                                            update_key_value(
-                                                                request_info,
-                                                                &mut key,                               
-                                                                constituent,
-                                                                v,
-                                                                self.line_index,
-                                                                self.char_index_in_line,
-                                                            )?;
-                                                        }
-
-                                                        Ok(None) => {
-                                                        }
-                                                        Err(e) => {
-                                                            if !placeholder.optional{
-                                                                return Err(e);
-                                                            }
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                }
-                                            }
-                        PlaceHolderType::AnyString => {
-                                                //Self::update_key(&mut key, constituent, None);
-                                                let value_type_option = self
-                                                    .read_delimited_string(constituent, constituents, &mut i, request_info)
-                                                    .await?;
-
-
-                                                match &value_type_option {
-                                                    Some(Value::String(data)) => {
-                                                        self.increment_char_index_by(data.len());
-                                                        update_key_value(
-                                                            request_info,
-                                                            &mut key,                                
-                                                            constituent,
-                                                            Value::String(data.to_owned()),
-                                                            self.line_index,
-                                                            self.char_index_in_line,
-                                                        )?;
-                                                    }
-                                                    None => {
-                                                    }
-                                                    _ => {}
-                                                }
-                            
-                             
-                                                i += 1;
-                                            }
-                        PlaceHolderType::StreamValue(name) => {
-                                                // let x = Box::pin(self.as_stream());
-                                                todo!()
-                                            }
-                        PlaceHolderType::OneOf(items) => {
-                                                let value_type_option = self
-                                                    .read_delimited_string(constituent, constituents, &mut i, request_info)
-                                                    .await?;
-                                                i += 1;
-
-                                                match &value_type_option {
-                                                    Some(Value::String(str)) => {
-                                                        update_key(&mut key, constituent, Some(str.to_owned()));
-                                                        if items.contains(str) {
-                                                            self.increment_char_index_by(str.len());
-                                                            request_info.add_info(key.unwrap(), Value::String(str.to_owned()));
-                                                            key = None;
-                                        
-                                                            //return Ok(());
-                                                        } else {
-                                                            return Err(self.error_token_expected_eof_reached());
-                                                        }
-                                                    }
-                                                    None => {}
-                                                    _ => {
-                                                        return Err(self.error_token_expected_eof_reached());
-                                                    }
-                                                }
-                                            },
-                   
-                        PlaceHolderType::BytesOfSizeN(size) => {
-                            let size = *size as usize;
-                            let value_type_option = Box::pin(
-                                self.read_bytes( constituent,
-                                     ReadBytesSize::Fixed(size as u32))).await?;
-                            match value_type_option {
-                                Some(value_type) => {
-                                    self.increment_char_index_by(size);
-                                    update_key_value(
-                                        request_info,
-                                        &mut key,                                
-                                        constituent,
-                                        value_type,
-                                        self.line_index,
-                                        self.char_index_in_line,
-                                    )?;
-                                }
-                                None => {}
-                            }
-                        },
-                        PlaceHolderType::BytesOfSizeFromHeader(header_name, ) => {
-                            if let Some(header_value) =  request_info.get_info(header_name){
-                                if let Some(size) = header_value.get_unsigned_num_32_value(){
-                                    
-                                    let value_type_option = Box::pin(ReadBytes::new(self, constituent, ReadBytesSize::Fixed(size))).await?;
-                                    //self.increment_char_index_by(size);
-                                    if let Some(value_type) = value_type_option {
-                                        update_key_value(
-                                            request_info,
-                                            &mut key,                                
-                                            constituent,
-                                            value_type,
-                                            self.line_index,
-                                            self.char_index_in_line,
-                                        )?;
-                                    }
-                                }
-                            }
-                        },
-                        PlaceHolderType::Space => {
-                                                let result = self
-                                                    .read_placeholder_as_string(constituent, " ".to_string())
-                                                    .await?;
-                                                self.increment_char_index();
-                                            }
-                        PlaceHolderType::NewLine => {
-                                                let result = self
-                                                    .read_placeholder_as_string(constituent, "\r\n".to_string())
-                                                    .await?;
-                                                self.increment_line_index();
-
-                                            }
-                        PlaceHolderType::Delimiter(delim) => {
-                                                let result = self
-                                                    .read_placeholder_as_string(constituent, delim.to_string())
-                                                    .await?;
-                                                self.increment_char_index();
-                                            }
-                        PlaceHolderType::Bytes => todo!(),
-                    }
-                    i += 1;
-                }
-            }
-        }
-        Ok(())
-    } */
-
+{   
     fn error_token_expected_eof_reached(&mut self) -> ParserError {
         ParserError::TokenExpected {
             line_index: self.line_index,
@@ -1076,194 +842,18 @@ where
                 .to_string(),
         }
     }
-
-    
-    
-    /* async fn read_delimited_string<RI:InfoProvider>(
-        &mut self,
-        placeholder: &Placeholder,
-        constituents: &Vec<Placeholder>,
-        i: &mut usize,
-        info_provider: &RI,
-    ) -> Result<Option<Value>, ParserError> {
-        let delimiter = self.get_delimiter(constituents, i).await?;
-        let result = self
-        .read_placeholder_until(placeholder, delimiter.to_owned(), info_provider)
-        .await?;
-    Ok(result)
-        
-    } */
-
-    /* async fn get_delimiter(
-        &mut self,
-        constituents: &Vec<Placeholder>,
-        i: &mut usize,
-    ) -> Result<String, ParserError> {
-        if constituents.len() > *i + 1 {
-            let delimiter = match &constituents[*i + 1].place_holder_type {
-                PlaceHolderType::Delimiter(delimiter) => delimiter,
-                PlaceHolderType::NewLine => "\r\n",
-
-                PlaceHolderType::Space => " ",
-                PlaceHolderType::ExactString(input) => input,
-                
-                _ => {
-                    return Err(ParserError::InvalidPlaceHolderTypeFound {
-                        line_index: self.line_index,
-                        char_index: self.get_error_char_index(),
-                        message: "Expected one of the delimiter type or known string, but found PlaceHolderType of Composite".to_string(),
-                    });
-                }
-            };
-            return Ok(delimiter.to_owned());
-            /*
-            let result = self
-                .read_placeholder_until(placeholder, delimiter.to_owned())
-                .await?;
-            *i += 1;
-            return Ok(());
-             */
-        } else {
-            return Err(ParserError::InvalidPlaceHolderTypeFound { 
-                line_index: self.line_index,
-                char_index: self.get_error_char_index(),
-                message: "Expected one of the delimiter type or known string, but reached end of child placeholders".to_string(),
-            });
-        }
-    }
-} */
-
-/* fn handle_type<RI>(
-    request_info: &mut RI,
-    key: &mut Option<String>,    
-    constituent: &Placeholder,
-    result: Value,
-    data: Option<String>,
-    line_pos: usize,
-    char_pos: usize,
-) -> Result<(), ParserError>
-where RI: InfoProvider {
-    match &constituent.name {
-        Key => {
-            update_key(key, constituent, data);
-            return Ok(());
-        },
-        InlineKeyWithValue(key_name) => {
-            update_key(key, constituent, Some(key_name.to_string()));
-            if key.is_none() {
-                return Err(ParserError::MissingKey);
-            }
-            //value = Some(key_name.to_owned());
-            request_info.add_info(key.as_ref().unwrap().to_owned(), result);
-            return Ok(());
-        }
-        Value => {
-            //update_key(key, constituent, Some(data.to_string()));
-            if key.is_none() {
-                return Err(ParserError::MissingKey);
-            }
-            //value = Some(data.to_owned());
-            request_info.add_info(key.as_ref().unwrap().to_owned(), result);
-            return Ok(());
-        }
-
-    _ => {
-        Ok(())
-    }
-
-
-}*/
-} 
-
-/* fn update_key_value1<RI>(
-    request_info: &mut RI,
-    key: &mut Option<String>,    
-    constituent: &Placeholder,
-    result: Value,
-    line_pos: usize,
-    char_pos: usize,
-) -> Result<(), ParserError>
-where
-    RI: InfoProvider,
-{
-    let result = match &result {
-        Value::String(data) => match &constituent.name {
-            Key => {
-                update_key(key, constituent, Some(data.to_string()));
-            }
-            InlineKeyWithValue(key_name) => {
-                update_key(key, constituent, Some(key_name.to_string()));
-                if key.is_none() {
-                    return Err(ParserError::MissingKey);
-                }
-                //value = Some(key_name.to_owned());
-                request_info.add_info(key.as_ref().unwrap().to_owned(), result);
-            }
-            Value => {
-                update_key(key, constituent, Some(data.to_string()));
-                if key.is_none() {
-                    return Err(ParserError::MissingKey);
-                }
-                //value = Some(data.to_owned());
-                request_info.add_info(key.as_ref().unwrap().to_owned(), result);
-            }
-
-            _ => {}
-        },
-        _ => {
-            Err(
-                ParserError::TokenExpected {
-                line_index: line_pos,
-                char_index: char_pos,
-                message: "Expected String token not found".to_string(),
-            })?;
-        }
-    };
-    Ok(result)
-} */
-
-
-/* fn update_key_value<RI>(
-    request_info: &mut RI,
-    key: &mut Option<String>,    
-    constituent: &Placeholder,
-    result: Value,
-    line_pos: usize,
-    char_pos: usize,
-) -> Result<(), ParserError>
-where
-    RI: InfoProvider,
-{
-    match &result {
-        Value::String(data) => {
-            let data = data.to_owned();
-            handle_type(request_info, key, constituent, result, Some(data), line_pos, char_pos)
-        },
-        Value::U8Vec(data) => {
-            handle_type(request_info, key, constituent, result, None, line_pos, char_pos)
-        },
-        _ => {
-            Err(
-                ParserError::TokenExpected {
-                line_index: line_pos,
-                char_index: char_pos,
-                message: "Expected String token not found".to_string(),
-            })?
-        }
-    }
-    
-} */
+}
 
 #[cfg(test)]
 mod tests {
-
-    
     use tokio::io::BufReader;
     use tokio_stream::StreamExt;
 
-    use crate::core::protocol_reader::ProtoStream;
+    use crate::core::{new_spec_builder, CompositeBuilder, DefaultSerializer, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, Mapper, ProtoSpecBuilder, ProtoSpecBuilderData, RepeatBuilder, RequestSerializer, StringSpecBuilder, ValueBuilder};
+    use crate::core::{protocol_reader::ProtoStream, SpecName};
     
-    use crate::test_utils::assert_result_has_string;
+    use crate::mapping_extractor::{DefaultMapper, SpecTraverse};
+    use crate::test_utils::{assert_result_has_string, TestRequestInfo};
     
 
     
@@ -1432,7 +1022,29 @@ mod tests {
         assert_eq!(new_line, b'\n');
 
         let eof = stream.next().await;
-        assert!(eof.is_none());
+        match eof{
+            Some(result) => {
+                match result{
+                    Ok(_) => todo!(),
+                    Err(e) => {
+                        let kind = e.kind();
+                        match kind{
+                            
+                            std::io::ErrorKind::UnexpectedEof => {
+                                assert!(true, "received eof as expected");
+                            },
+                            _ => {
+                                assert!(false, "End of file excepted, found {}", e.to_string());
+                            },
+                        }
+                    },
+                }
+            },
+            None => {
+                assert!(false, "Got None, but expected a value");
+            },
+        }
+        
     }
 
     #[tokio::test]
@@ -1477,57 +1089,73 @@ mod tests {
         }
     }
 
-    /* #[tokio::test]
+    #[tokio::test]
     async fn parse_composite_test() {
-        let root_placeholder =
-            Placeholder::new(Name("root".to_string()), None, PlaceHolderType::Composite, false);
+        let spec_builder =
+            new_spec_builder(SpecName::Name("root".to_string()));
 
-        let mut spec_builder = SpecBuilder(root_placeholder);
-
-        let request_line_placeholder = SpecBuilder::new_composite("request_line".to_string(), false)
+        let request_line_placeholder = new_spec_builder(SpecName::NoName)
+            .inline_value_follows(SpecName::NoName, false)
             .expect_one_of_string(
+                SpecName::Name("request_method".to_owned()), false,
                 vec![
                     "GET".to_string(),
                     "POST".to_string(),
                     "DELETE".to_string(),
                     "PUT".to_string(),
                     "OPTIONS".to_string(),
-                ],
-                InlineKeyWithValue("request_method".to_string()),
-                false
+                ],                
             )
-            .expect_space()
-            .expect_string(InlineKeyWithValue("request_uri".to_string()),false)
-            .expect_space()
-            .expect_string(InlineKeyWithValue("protocol_version".to_string()), false)
-            .expect_newline()
+            .delimited_by_space()
+            .inline_value_follows(SpecName::NoName, false)
+            .expect_string(SpecName::Name("request_uri".to_string()),false)
+            .delimited_by_space()
+            .inline_value_follows(SpecName::NoName, false)
+            .expect_string(SpecName::Name("protocol_version".to_string()),false)
+            .delimited_by_newline()
             .build();
 
-        let mut header_placeholder_builder = SpecBuilder::new_composite("header".to_string(), false);
+        let mut header_placeholder_builder = new_spec_builder(SpecName::Name("header".to_string()));
         let header_place_holder = header_placeholder_builder
-            .expect_string(crate::core::PlaceHolderIdentifier::Key, false)
-            .expect_delimiter(": ".to_string())
-            .expect_string(crate::core::PlaceHolderIdentifier::Value, false)
-            .expect_newline()
+            .key_follows(SpecName::Name("header_name".to_owned()), true)
+            .expect_string(SpecName::NoName, false)
+            .delimited_by(": ".to_string())
+            .value_follows(SpecName::Name("header_value".to_owned()), false)
+            .expect_string(SpecName::NoName, false)
+            .delimited_by_newline()
             .build();
 
-        spec_builder.expect_composite(request_line_placeholder, "first_line".to_owned());
-        spec_builder.expect_newline();
-        spec_builder.expect_repeat_many(header_place_holder, "headers".to_owned());
-        spec_builder.expect_exact_string(InlineKeyWithValue("data".to_string()), "test123".to_string(), false);
-        spec_builder.expect_newline();
+        let spec_builder = spec_builder.expect_composite(request_line_placeholder);
+        let spec_builder = spec_builder.expect_newline();
+        let spec_builder = spec_builder.repeat_many(SpecName::NoName, false, crate::core::Separator::Delimiter("\r\n".to_owned()), header_place_holder);
 
-        let placehoder = spec_builder.build();
+        let spec_builder = spec_builder.inline_value_follows(SpecName::NoName, false)
+        .expect_exact_string(SpecName::Name("data".to_string()), "test123".to_string(), false);
+        let spec_builder = spec_builder.expect_newline();
+
+        
         let mut protocol_reader = ProtocolBuffReader::new(
             BufReader::new(
-                b"GET /index.html HTTP/1.1\r\n\r\nname: value\r\nname2: value2\r\ntest123\r\n".as_ref(),
+                b"GET /index.html HTTP/1.1\r\n\r\nname: value\r\nname2: value2\r\n\r\ntest123\r\n".as_ref(),
             ),
             1024,
         );
-        let mut request_info = TestRequestInfo::default();
-        let result = protocol_reader
+
+        let spec =spec_builder.build();
+        
+        let mut request_info = TestRequestInfo::new();
+
+        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        spec.traverse(&mut mapper );
+        println!("{:?}", &mut mapper);
+        request_info.0 = mapper;
+
+        
+
+        let result = DefaultSerializer{}.deserialize_from(&mut request_info, &mut protocol_reader, &spec).await;
+        /* let result = protocol_reader
             .parse_composite(&mut request_info, &placehoder, )
-            .await;
+            .await; */
         println!("Result: {:?}", result);
         assert!(result.is_ok());
         let request_method = request_info.get_info(&"request_method".to_string()).unwrap();
@@ -1540,7 +1168,7 @@ mod tests {
             }
         }
 
-        match request_info.get_info(&"name".to_owned()).unwrap() {
+        match request_info.get_key_value_info_by_spec_name("name".to_owned(), &"header_name".to_owned()).unwrap() {
             crate::core::Value::String(value) => {
                 assert!(*value == "value".to_string());
             }
@@ -1549,7 +1177,7 @@ mod tests {
             }
         }
 
-        match request_info.get_info(&"name2".to_owned()).unwrap() {
+        match request_info.get_key_value_info_by_spec_name("name2".to_owned(), &"header_name".to_owned()).unwrap() {
             crate::core::Value::String(value) => {
                 assert!(*value == "value2".to_string());
             }
@@ -1557,7 +1185,7 @@ mod tests {
                 assert!(false);
             }
         }
-
+        println!("---{:?}---", request_info.get_info(&"data".to_owned()).as_ref().unwrap());
         match request_info.get_info(&"data".to_owned()).unwrap() {
             crate::core::Value::String(value) => {
                 assert!(*value == "test123".to_string());
@@ -1566,23 +1194,29 @@ mod tests {
                 assert!(false);
             }
         }
-    } */
+    }
 
 
     
-    /* #[tokio::test]
+    #[tokio::test]
     async fn test_read_unexpected_token_error() {
         let data = b"Hello World\n";
-        let mut spec = SpecBuilder::new("root".to_owned());
-        let root = spec.expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)
-            .expect_space()
-            .expect_exact_string(InlineKeyWithValue("second_word".to_string()), "World".to_string(), false)
+        let mut spec = new_spec_builder(SpecName::NoName);
+        let root = spec.inline_value_follows(SpecName::NoName, false)
+            .expect_string(SpecName::Name("first_word".to_string()), false)
+            .delimited_by_space()
+            .inline_value_follows(SpecName::NoName, false)
+            .expect_exact_string(SpecName::Name("second_word".to_string()), "World".to_string(), false)
             .expect_space()
             .build();
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
-        let result = protocol_reader.parse_composite(&mut request_info, &root).await;
+        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        root.traverse(&mut mapper );
+        request_info.0 = mapper;
+        //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
+        let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &root).await;
         
 
         
@@ -1593,8 +1227,8 @@ mod tests {
             Err(e   ) => {
                 match e {
                     crate::core::ParserError::TokenExpected { line_index, char_index, message } => {
-                        assert!(line_index == 0);
-                        assert!(char_index == 11);
+                        /* assert!(line_index == 0);
+                        assert!(char_index == 11); */
                         assert!(message.contains( "Expected token not found"));
                     }
                     _ => {
@@ -1610,17 +1244,24 @@ mod tests {
     #[tokio::test]
     async fn test_read_token_eof_error() {
         let data = b"Hello World\r\n";
-        let mut spec = SpecBuilder::new("root".to_owned());
-        let root = spec.expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)
-            .expect_space()
-            .expect_exact_string(InlineKeyWithValue("second_word".to_string()), "World".to_string(),false)
+        let mut spec = new_spec_builder(SpecName::NoName);
+        let root = spec
+            .inline_value_follows(SpecName::NoName, false)
+            .expect_string(SpecName::Name("first_word".to_string()), false)
+            .delimited_by_space()
+            .inline_value_follows(SpecName::NoName, false)
+            .expect_exact_string(SpecName::Name("second_word".to_string()), "World".to_string(),false)
             .expect_newline()
             .expect_newline()
             .build();
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
-        let result = protocol_reader.parse_composite(&mut request_info, &root).await;
+        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        root.traverse(&mut mapper );
+        request_info.0 = mapper;
+        //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
+        let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &root).await;
         
 
         
@@ -1629,11 +1270,13 @@ mod tests {
                 assert!(false, "expected unexpected token error, but got success");
             }
             Err(e   ) => {
+                println!("Error received {}", e);
                 match e {
-                    crate::core::ParserError::TokenExpected { line_index, char_index, message } => {
-                        assert!(line_index == 1);
+                    crate::core::ParserError::EndOfStream=> {
+                        /* assert!(line_index == 1);
                         assert!(char_index == 0);
-                        assert!(message.contains( "EOF reached"));
+                        assert!(message.contains( "EOF reached")); */
+                        assert!(true , "expected OndOfStream error");
                     }
                     _ => {
                         assert!(false, "expected unexpected token error, but got error");
@@ -1643,22 +1286,30 @@ mod tests {
 
             }
         }
-    } */
+    } 
 
 
-    /* #[tokio::test]
+    #[tokio::test]
     async fn test_proto_optional_test() {
         let data = b"Hello \r\n";
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
-        let spec = SpecBuilder::new("root".to_owned())
-            .expect_string(crate::core::PlaceHolderIdentifier::InlineKeyWithValue("first_word".to_string()), false)
-            .expect_space()
-            .expect_exact_string(InlineKeyWithValue("second_word".to_string()), "World".to_string(), true)
-            .expect_newline()
-            .build();
+        let spec = new_spec_builder(SpecName::NoName)
+        .inline_value_follows(SpecName::Name("first_word".to_string()), false)
+        
+            .expect_string(SpecName::NoName, false)
+            .delimited_by_space()
+            . inline_value_follows(SpecName::Name("second_word".to_string()), true)
+            .expect_exact_string(SpecName::NoName, "World".to_string(), true)
+            /* .expect_exact_string(SpecName::NoName, "World".to_string(), true) 
+            .expect_newline() */
+            .build(); 
 
         let mut request_info = TestRequestInfo::new();
-        let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
+        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        spec.traverse(&mut mapper );
+        request_info.0 = mapper;
+        //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
+        let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &spec).await;
         match result {
             Ok(_) => {
                 let first_word = request_info.get_info(&"first_word".to_string()).unwrap();
@@ -1681,7 +1332,7 @@ mod tests {
 
         
         
-    } */
+    }
 
 
     
