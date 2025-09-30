@@ -757,7 +757,7 @@ where
         delimiter: String,        
         
     ) -> Result<Option<Vec<u8>>, ParserError>{
-        let data = timeout(Duration::from_secs(1), ReadPlaceHolderUntil::new(self, delimiter)).await;
+        let data = timeout(Duration::from_millis(300), ReadPlaceHolderUntil::new(self, delimiter)).await;
         match data {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(e),
@@ -770,7 +770,7 @@ where
         input: String,
     ) -> Result<Option<Vec<u8>>, ParserError>
     {
-        let data = timeout(Duration::from_secs(1),ReadString::new(self, input)).await;
+        let data = timeout(Duration::from_millis(300),ReadString::new(self, input)).await;
         match data {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(e),
@@ -783,7 +783,7 @@ where
         size: ReadBytesSize,
     ) -> Result<Option<Vec<u8>>, ParserError>
     {
-            let data = timeout(Duration::from_secs(1), ReadBytes::new(self, size)).await;
+            let data = timeout(Duration::from_millis(300), ReadBytes::new(self, size)).await;
             match data {
                 Ok(Ok(data)) => Ok(data),
                 Ok(Err(e)) => Err(e),

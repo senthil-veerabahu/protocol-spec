@@ -286,18 +286,36 @@ pub struct HttpResponseInfo {
     mapper: Box<dyn Mapper>,
 }
 
-impl ResponseInfo for HttpResponseInfo {}
 
+impl ResponseInfo for HttpResponseInfo {
+    fn add_defaults(&mut self) {
+        /*status_code: Value::String("200".to_string()),
+            headers: HashMap::new(),
+            protocol_version: Some(Value::String("HTTP/1.1".to_string())),
+            status_text: Value::String("OK".to_string()),
+            response_body: Default::default(),*/
+        let now: DateTime<Utc> = Utc::now();
+        self.add_info("status_code".to_owned(), Value::String("200".to_string()));
+        self.add_info("protocol_version".to_owned(), Value::String("HTTP/1.1".to_string()));
+        self.add_info("status_text".to_owned(), Value::String("OK".to_string()));
+        self.add_info("Date".to_owned(), Value::String(now.format("%a %d %b %Y %H %M %S GMT").to_string()));
+    }
+}
+
+use chrono::{DateTime, Utc};
 impl Default for HttpResponseInfo {
     fn default() -> Self {
-        HttpResponseInfo {
+        
+        
+        let mut response = HttpResponseInfo {
             status_code: Value::String("200".to_string()),
-            headers: Default::default(),
+            headers: HashMap::new(),
             protocol_version: Some(Value::String("HTTP/1.1".to_string())),
-            status_text: Value::String("Ok".to_string()),
+            status_text: Value::String("OK".to_string()),
             response_body: Default::default(),
             mapper: Box::new(DefaultMapper::new()),
-        }
+        };
+        response
     }
 }
 
@@ -356,7 +374,6 @@ impl_request_info_and_builder!(
 
 pub struct HttpRequestFactory{
     spec: ListSpec,
-    mapper: Box<dyn Mapper>,
 }
 
 /* impl Clone for Box<dyn Mapper>{
@@ -368,13 +385,10 @@ pub struct HttpRequestFactory{
 
 impl HttpRequestFactory{
     pub fn new(spec: ListSpec) ->Self{
-        let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
-
-        spec.traverse(&mut mapper);
         
         Self { 
             spec,
-            mapper, 
+     
         }
     }
 }
@@ -428,7 +442,8 @@ impl HttpRequestHandler{
                 let content = to_string(&Product::new(1, "Table".to_owned()))?.into_bytes();
                 let response = HttpResponseBuilder(response)
                     .with_status_code("200".to_owned())
-                    .with_status_text("Ok".to_owned())
+                    .with_status_text("OK".to_owned())
+                    .with_protocol_version("HTTP/1.1".to_owned())
                     .with_content_type("application/json".to_owned())
                     .with_content_length(content.len().to_string())
                     .with_response_body(content)
@@ -451,6 +466,7 @@ impl HttpRequestHandler{
                     let response = HttpResponseBuilder(response)
                     .with_status_code("201".to_owned())
                     .with_status_text("Created".to_owned())                    
+                    .with_protocol_version("HTTP/1.1".to_owned())
                     .with_content_length("0".to_owned())
                     .build();
                     return Ok(response);
@@ -478,7 +494,8 @@ impl HttpRequestHandler{
                     let product: Product = serde_json::from_str(content).unwrap();
                     let response = HttpResponseBuilder(response)
                     .with_status_code("200".to_owned())
-                    .with_status_text("Ok".to_owned())                    
+                    .with_status_text("OK".to_owned())                    
+                    .with_protocol_version("HTTP/1.1".to_owned())
                     .build();
                     return Ok(response);
                 }
@@ -531,17 +548,13 @@ impl
 
 pub struct HttpResponseFactory{
     response_spec: ListSpec,
-    mapper: Box<dyn Mapper>,
 }
 
 
 impl HttpResponseFactory{
     pub fn new(spec: ListSpec) ->Self{
-        let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
-        spec.traverse(&mut mapper);
         Self { 
-            response_spec: spec,
-            mapper:  mapper, 
+            response_spec: spec, 
         }
     }
 }
@@ -615,14 +628,14 @@ impl ProtocolConfig for HttpConfig {
 }
 
 impl InfoProvider for HttpResponseInfo {
-    /* fn get_info(&self, key: &String) -> Option<&Value> {
+    fn get_info(&self, key: &String) -> Option<&Value> {
         let key_ref = key.as_str();
         match key_ref {
             "status_code" | "protocol_version" | "status_text" | "response_body"=> {
-                return self.get_mapper().get_in(key_ref);
+                return self.get_mapper().get_value_by_key(key_ref);
             }
             _ => {
-                return self.mapper.get_value_by_key(key_ref);
+                return self.mapper.get_value_from_key_value_list(key_ref.to_owned(), "header_name");
             }
         }
     }
@@ -634,10 +647,10 @@ impl InfoProvider for HttpResponseInfo {
             }
             _ => {
                 //self.headers.insert(key.to_string(), value);
-                self.get_mapper_mut().add_to_key_value_list(key, value, "header-name".to_string(), "header-value".to_string());
+                self.get_mapper_mut().add_to_key_value_list(key, value, "header_name".to_string(), "header_value".to_string());
             }
         }
-    } */
+    }
     
     fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper> {
         &mut self.mapper
@@ -657,7 +670,7 @@ impl InfoProvider for HttpRequestInfo {
                 return self.get_mapper().get_value_by_key(key_ref);
             }
             _ => {
-                return self.get_mapper().get_value_by_key(key_ref).clone();
+                return self.get_mapper().get_value_from_key_value_list(key.clone(),"header_name").clone();
             }
         }
     }
@@ -669,7 +682,7 @@ impl InfoProvider for HttpRequestInfo {
             }
             _ => {
                 //self.headers.insert(key.to_string(), value);
-                self.get_mapper_mut().add_to_key_value_list(key, value, "header-name".to_string(), "header-value".to_string());
+                self.get_mapper_mut().add_to_key_value_list(key, value, "header_name".to_string(), "header-value".to_string());
             }
         }
     }
@@ -721,9 +734,11 @@ pub fn build_http_request_protocol() -> ListSpec {
     let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 
     let request_line_placeholder= ProtoSpecBuilderData::<BuildFromScratch>::new_with(Transient("request_line".to_string()), false);
-    let request_line_placeholder = request_line_placeholder.inline_value_follows(Name("request_method".to_owned()), false);
+    //let request_line_placeholder = ;
 
-        let request_line_placeholder = request_line_placeholder.expect_one_of_string(
+        let request_line_placeholder = 
+        request_line_placeholder.inline_value_follows(Name("request_method".to_owned()), false)
+        .expect_one_of_string(
             NoName,
             false,
             vec![
@@ -734,7 +749,7 @@ pub fn build_http_request_protocol() -> ListSpec {
                 "OPTIONS".to_string(),
             ],
         )
-        .delimited_by_newline()
+        .delimited_by_space()
 
         .inline_value_follows(Name("request_uri".to_owned()), false)
         .expect_string(
@@ -746,26 +761,26 @@ pub fn build_http_request_protocol() -> ListSpec {
 
         .inline_value_follows(Name("protocol_version".to_owned()), false)
         .expect_string(NoName,false)
-        .delimited_by_space()
+        .delimited_by_newline()
         .build();
 
     let mut header_placeholder_builder = new_spec_builder(Transient("header".to_string()));
     //let mut header_placeholder_builder = header_placeholder_builder.delimited_by_newline();
 
     let header_place_holder = header_placeholder_builder
-        .key_follows(Name("HeaderName".to_string()), true)
+        .key_follows(Name("header_name".to_string()), true)
         .expect_string( NoName, false)
         .delimited_by(": ".to_string())
         
-        .value_follows(Name("HeaderValue".to_owned()), false)
+        .value_follows(Name("header_value".to_owned()), false)
         .expect_string(NoName, false)
         .delimited_by_newline()
         .build();
 
     let spec_builder = spec_builder.expect_composite(request_line_placeholder)
     .repeat_many(Name("headers".to_owned()), true, Separator::Delimiter("\r\n".to_owned()),header_place_holder)
-    .expect_newline()
-    .use_spec(Box::new(BodySpec::new(None, true)));
+    
+    .use_spec(Box::new(BodySpec::new(Name("request_body".to_owned()), true)));
 
     spec_builder.build()
 }
@@ -775,9 +790,8 @@ pub struct BodySpec{
 }
 
 impl BodySpec{
-    pub fn new(name: Option<String>, optional: bool) -> Self{
-        let name = name.unwrap_or("request-body-reader".to_owned());
-        let spec_meta_data = SpecMetaData::new(Name(name), ValueType::None, optional);
+    pub fn new(name: SpecName, optional: bool) -> Self{        
+        let spec_meta_data = SpecMetaData::new(name, ValueType::None, optional);
         BodySpec { spec_meta_data: spec_meta_data }
     }
 }
@@ -801,9 +815,16 @@ impl SpecDeserialize for BodySpec{
         reader: &mut (dyn SpecRead), update_info: bool,
     ) -> Result<Value, ParserError>{
         let content_length_option = info_provider.get_info(&"Content-Length".to_owned());
-        let content_length_str = content_length_option.unwrap().get_string_value();
-        let content_length: u32 = content_length_str.unwrap().parse().expect("Failed to parse string to u16 for content-length header");
-        NBytesSpec::new(self.spec_meta_data.get_name().clone(), content_length, self.spec_meta_data.is_optional()).deserialize(info_provider, reader, update_info).await
+        return match content_length_option{
+            Some(value) => {
+                let content_length_str = value.get_string_value();
+                let content_length: u32 = content_length_str.unwrap().parse().expect("Failed to parse string to u16 for content-length header");
+                NBytesSpec::new(self.spec_meta_data.get_name().clone(), content_length, self.spec_meta_data.is_optional()).deserialize(info_provider, reader, update_info).await
+            },
+            None => {
+                Ok(Value::None)
+            },
+        }
     }
 }
 
@@ -813,6 +834,7 @@ impl Spec for BodySpec{
     }
 }
 
+use crate::core::Anyway;
 #[async_trait]
 impl SpecSerialize for BodySpec{
 
@@ -821,7 +843,19 @@ impl SpecSerialize for BodySpec{
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
             writer: &mut (dyn SpecWrite)
         ) -> Result<(), ParserError>{
-            todo!("implement")
+            mapper_context.start_spec(self);
+            let spec_name = mapper_context.get_last_available_spec_name();
+            if let Some(spec_name) = spec_name{
+                let bytes = info_provider.get_info(&spec_name);
+                if let Some(value) = bytes{
+                    return writer.write_data_bytes(value.get_u8_vec().unwrap()).await.end_spec(mapper_context, self);
+                }else{
+                    mapper_context.end_spec(self)?;
+                }
+            }else{
+                mapper_context.end_spec(self)?;
+            }
+            Ok(())
         }
     
 }
@@ -856,9 +890,8 @@ pub fn build_http_response_protocol() -> ListSpec {
         .build();
 
     let root_builder = root_builder.expect_composite(response_line_placeholder)
-    .repeat_many( Name("headers".to_owned()), true,Separator::Delimiter("\r\n".to_owned()), header_place_holder, )
-    .expect_newline()
-    .use_spec(Box::new(BodySpec::new(None, true)));
+    .repeat_many( Name("headers".to_owned()), true,Separator::Delimiter("\r\n".to_owned()), header_place_holder, )    
+    .use_spec(Box::new(BodySpec::new(Name("response_body".to_owned()), true)));
     root_builder.build()
 }
 

@@ -6,7 +6,7 @@ use std::vec;
 async fn main() {
     let a = 10u32;
     let b = a.to_be_bytes();
-    let mut http_server_builder = 
+    let mut http_server_builder =   
     protocol_spec::core::ServerInstanceBuilder::<HttpConfig>::default();
     http_server_builder = http_server_builder
         .hosts(vec!["127.0.0.1:8080".to_string()/* , "192.168.1.2:8080".to_string() */])
