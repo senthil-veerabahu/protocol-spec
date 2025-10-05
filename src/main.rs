@@ -1,9 +1,16 @@
 //use core::;
 use protocol_spec::{core::Server, http::{build_http_request_protocol, build_http_response_protocol, HttpConfig, HttpRequestFactory, HttpResponseFactory}};
+use tracing::Level;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use std::vec;
 
 #[tokio::main]
 async fn main() {
+
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env().add_directive(Level::DEBUG.into()))
+        .init();
     let a = 10u32;
     let b = a.to_be_bytes();
     let mut http_server_builder =   

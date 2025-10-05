@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use memchr::memmem::Finder;
 use pin_project::pin_project;
+use tracing::debug;
 use std::{
      fmt::Display, future::Future, io::{self, ErrorKind}, pin::Pin, task::{Context, Poll}, time::Duration
 };
@@ -274,7 +275,7 @@ impl <R>ProtocolBuffReader<R>
                 if buf.is_empty() {
                     return Poll::Ready(Err(io::Error::new(ErrorKind::UnexpectedEof, "End Of file reached")));
                 }
-                println!("len {}, cap {}", self.buf.len(), self.cap);
+                debug!("len {}, cap {}", self.buf.len(), self.cap);
                 self.buf.extend_from_slice(buf);
                 len = buf.len();
                 Poll::Ready(Ok(buf.len()))
@@ -356,7 +357,7 @@ impl <R>ProtocolBuffReader<R>
             return &[];
         }
         let data = &self.buf[self.pos..];
-        println!("-{}-", String::from_utf8_lossy(data));
+        debug!("-{}-", String::from_utf8_lossy(data));
         data
         
     }
@@ -732,9 +733,9 @@ where
         }
         let buf = protocol_reader.get_buffer();
         let pos = protocol_reader.pos;
-        println!("pos is {}", pos);
-        println!("input get bytes {:?}, len {}", input.as_bytes(), input.as_bytes().len());
-        println!("buf  get byets {:?}, len {}", &buf[pos..pos + input.len()], &buf[pos..pos + input.len()].len());
+        debug!("pos is {}", pos);
+        debug!("input get bytes {:?}, len {}", input.as_bytes(), input.as_bytes().len());
+        debug!("buf  get byets {:?}, len {}", &buf[pos..pos + input.len()], &buf[pos..pos + input.len()].len());
         if &buf[pos..pos + input.len()] == input.as_bytes() {
             return Some(Poll::Ready(Ok(pos)));
         } else {
@@ -848,6 +849,7 @@ where
 mod tests {
     use tokio::io::BufReader;
     use tokio_stream::StreamExt;
+    use tracing::{debug, warn};
 
     use crate::core::{new_spec_builder, CompositeBuilder, DefaultSerializer, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, Mapper, ProtoSpecBuilder, ProtoSpecBuilderData, RepeatBuilder, RequestSerializer, StringSpecBuilder, ValueBuilder};
     use crate::core::{protocol_reader::ProtoStream, SpecName};
@@ -1147,7 +1149,7 @@ mod tests {
 
         let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
         spec.traverse(&mut mapper );
-        println!("{:?}", &mut mapper);
+        debug!("{:?}", &mut mapper);
         request_info.0 = mapper;
 
         
@@ -1156,7 +1158,7 @@ mod tests {
         /* let result = protocol_reader
             .parse_composite(&mut request_info, &placehoder, )
             .await; */
-        println!("Result: {:?}", result);
+        debug!("Result: {:?}", result);
         assert!(result.is_ok());
         let request_method = request_info.get_info(&"request_method".to_string()).unwrap();
         match request_method {
@@ -1185,7 +1187,6 @@ mod tests {
                 assert!(false);
             }
         }
-        println!("---{:?}---", request_info.get_info(&"data".to_owned()).as_ref().unwrap());
         match request_info.get_info(&"data".to_owned()).unwrap() {
             crate::core::Value::String(value) => {
                 assert!(*value == "test123".to_string());
@@ -1270,7 +1271,7 @@ mod tests {
                 assert!(false, "expected unexpected token error, but got success");
             }
             Err(e   ) => {
-                println!("Error received {}", e);
+                warn!("Error received {}", e);
                 match e {
                     crate::core::ParserError::EndOfStream=> {
                         /* assert!(line_index == 1);

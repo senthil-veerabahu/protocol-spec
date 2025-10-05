@@ -373,7 +373,7 @@ impl_request_info_and_builder!(
 
 
 pub struct HttpRequestFactory{
-    spec: ListSpec,
+    spec:Box<dyn ProtocolSpec>,
 }
 
 /* impl Clone for Box<dyn Mapper>{
@@ -387,7 +387,7 @@ impl HttpRequestFactory{
     pub fn new(spec: ListSpec) ->Self{
         
         Self { 
-            spec,
+            spec: Box::new(spec),
      
         }
     }
@@ -525,7 +525,7 @@ impl
         HttpResponseInfo,
     > for HttpRequestFactory
 {
-    fn get_request_spec(&self) -> &ListSpec {
+    fn get_request_spec(&self) -> &Box<dyn ProtocolSpec> {
         &self.spec
     }
 
@@ -547,14 +547,14 @@ impl
 }
 
 pub struct HttpResponseFactory{
-    response_spec: ListSpec,
+    response_spec: Box<dyn ProtocolSpec>,
 }
 
 
 impl HttpResponseFactory{
     pub fn new(spec: ListSpec) ->Self{
         Self { 
-            response_spec: spec, 
+            response_spec: Box::new(spec), 
         }
     }
 }
@@ -581,7 +581,7 @@ impl ResponseErrorHandler<HttpResponseInfo> for HttpResponseHandler {
 impl ResponseFactory<HttpResponseInfo, DefaultSerializer, HttpResponseHandler, HttpResponseHandler>
     for HttpResponseFactory
 {
-    fn get_response_spec(&self) -> &ListSpec {
+    fn get_response_spec(&self) -> &Box<dyn ProtocolSpec> {
         &self.response_spec
     }
 
@@ -764,7 +764,7 @@ pub fn build_http_request_protocol() -> ListSpec {
         .delimited_by_newline()
         .build();
 
-    let mut header_placeholder_builder = new_spec_builder(Transient("header".to_string()));
+    let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));
     //let mut header_placeholder_builder = header_placeholder_builder.delimited_by_newline();
 
     let header_place_holder = header_placeholder_builder
@@ -843,17 +843,13 @@ impl SpecSerialize for BodySpec{
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
             writer: &mut (dyn SpecWrite)
         ) -> Result<(), ParserError>{
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             let spec_name = mapper_context.get_last_available_spec_name();
             if let Some(spec_name) = spec_name{
                 let bytes = info_provider.get_info(&spec_name);
                 if let Some(value) = bytes{
-                    return writer.write_data_bytes(value.get_u8_vec().unwrap()).await.end_spec(mapper_context, self);
-                }else{
-                    mapper_context.end_spec(self)?;
+                    return writer.write_data_bytes(value.get_u8_vec().unwrap()).await;
                 }
-            }else{
-                mapper_context.end_spec(self)?;
             }
             Ok(())
         }
@@ -863,11 +859,11 @@ impl SpecSerialize for BodySpec{
 //use crate::core::SpecName::*;
 #[allow(unused)]
 pub fn build_http_response_protocol() -> ListSpec {
-    let root_builder = new_spec_builder(
+    let root_builder = new_mandatory_spec_builder(
         SpecName::NoName,
     );
 
-    let response_line_placeholder = new_spec_builder(SpecName::Transient("response_line".to_string()))
+    let response_line_placeholder = new_mandatory_spec_builder(SpecName::Transient("response_line".to_string()))
         .inline_value_follows(Name("protocol_version".to_string()), false)
         .expect_string(NoName, false)
         .delimited_by_space()
@@ -879,7 +875,7 @@ pub fn build_http_response_protocol() -> ListSpec {
         .delimited_by_newline()
         .build();
 
-    let mut header_placeholder_builder = new_spec_builder(Name("header".to_string()));
+    let mut header_placeholder_builder = new_mandatory_spec_builder(Name("header".to_string()));
     let header_place_holder = header_placeholder_builder
         .key_follows(Name("header_name".to_string()), false)
         .expect_string(NoName, false)

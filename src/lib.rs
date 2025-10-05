@@ -5,6 +5,8 @@ pub(crate) mod mapping_extractor{
 
 
 
+    use tracing::debug;
+
     use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, ParserError, RepeatManySpec, RepeaterContext, SimpleValueSpec, Spec, SpecMapper, SpecName, SpecType, Value, ValueSpec};
 
      
@@ -236,7 +238,7 @@ pub(crate) mod mapping_extractor{
     
     impl <T> SpecMapper for T where T:SimpleValueSpec{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>)->Result<(), ParserError>  {
-            println!("delimited string spec {}", self.get_meta_data().get_name().to_string());
+            debug!("delimited string spec {}", self.get_meta_data().get_name().to_string());
 
             if let Some(key_name) = mapper.get_mapper_context().get_last_available_spec_name() {
                 let path = mapper.get_mapper_context_mut().get_current_spec_path_template();
@@ -270,7 +272,7 @@ pub(crate) mod mapping_extractor{
     impl SpecMapper for KeyValueSpec{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError> {
 
-            println!("keyvalue name {}, key name {}, inner keyspec name {}", self.get_meta_data().get_name(), self.key.get_meta_data().get_name(), self.key.0.get_meta_data().get_name());
+            debug!("keyvalue name {}, key name {}, inner keyspec name {}", self.get_meta_data().get_name(), self.key.get_meta_data().get_name(), self.key.0.get_meta_data().get_name());
             let path_finder =  |mapper:  &Box<dyn Mapper>| {
                 mapper.get_mapper_context().get_current_spec_path_template()
             };
@@ -342,6 +344,7 @@ pub mod core {
     use protocol_reader::{ MarkAndRead};
 
     use protocol_writer::ProtocolBuffWriter;
+    use tracing::{debug, info, warn};
     
     
     
@@ -877,7 +880,7 @@ pub mod core {
         REQERRH: RequestErrorHandler<REQI, RESI>,
         RESI: ResponseInfo,
     {
-        fn get_request_spec(&self) -> &ListSpec;
+        fn get_request_spec(&self) -> &Box<dyn ProtocolSpec>;
 
         
 
@@ -903,7 +906,7 @@ pub mod core {
         RESH: ResponseHandler<RESI>,
         RESERRH: ResponseErrorHandler<RESI>,
     {
-        fn get_response_spec(&self) -> &ListSpec;
+        fn get_response_spec(&self) -> &Box<dyn ProtocolSpec>;
         fn create_response_info(&self) -> RESI;
         fn create_response_serializer(&self) -> RESS;
         fn create_response_handler(&self) -> RESH;
@@ -959,7 +962,7 @@ pub mod core {
             &self,
             req: &mut REQI,
             writer: W,
-            spec: &dyn SpecSerialize,
+            spec: Box<dyn ProtocolSpec>,
         ) -> Result<(), ParserError>
         where W: AsyncWrite + Unpin + Send + Sync;
 
@@ -981,7 +984,7 @@ pub mod core {
             &self,
             req: RSI,
             writer: W,
-            spec: &dyn SpecSerialize,
+            spec: &Box<dyn ProtocolSpec>,
         ) -> Result<(), ParserError>
         where W: AsyncWrite + Unpin + Send + Sync;
 
@@ -1006,12 +1009,13 @@ pub mod core {
             &self,
             request_info: &mut REQI,
             writer: W,
-            spec: &dyn SpecSerialize,
+            spec: Box<dyn ProtocolSpec>,
         ) -> Result<(), ParserError> 
         where W: AsyncWrite + Unpin + Send + Sync {
             let mut mapper_context = MapperContext::new();
             let mut protocol_writer = ProtocolBuffWriter::new(writer);
-            spec.serialize(request_info, &mut mapper_context, &mut protocol_writer).await?;
+
+            serialize(&spec, request_info,  &mut protocol_writer, &mut mapper_context).await?;
             Ok(())
         }
 
@@ -1053,11 +1057,11 @@ pub mod core {
             &self,
             response_info: RESI,
             writer: W,
-            spec: &dyn SpecSerialize,
+            spec: &Box<dyn ProtocolSpec>,
         ) -> Result<(), ParserError> where W: AsyncWrite + Unpin + Send + Sync {
             let mut protocol_writer = ProtocolBuffWriter::new(writer);
             let mut mapper_context= MapperContext::new();
-            spec.serialize(&response_info,&mut mapper_context, &mut protocol_writer).await?;
+            serialize(spec, &response_info, &mut protocol_writer, &mut mapper_context).await?;
             Ok(())
         }
 
@@ -1073,19 +1077,6 @@ pub mod core {
         where R:SpecRead {
             let mut protocol_reader = ProtocolBuffReader::new(reader, 1024);
             let parse_result = spec.deserialize(response_info,&mut  protocol_reader, true).await?;
-            /* let result = protocol_reader
-            .parse_composite(&mut request_info, spec).await; */
-            
-            /* if let Err(parser_error) = parse_result{
-                if let ParserError::EndOfStream = parser_error  {
-                    if response_info.has_all_data() {
-                        return Ok(response_info);
-                    }
-                    return Err(ParserError::EndOfStream);
-                } else {
-                    return Err(parser_error);
-                }
-            } */
            //todo handle the above
             Ok(response_info)
         }        
@@ -1198,7 +1189,7 @@ pub mod core {
     }
 
     impl <T> RequestFactory<T::REQI, T::REQSER, T::REQH, T::REQERRH, T::RESI> for MapperAwareRequestFactory<T> where T: ProtocolConfig{
-        fn get_request_spec(&self) -> &ListSpec {
+        fn get_request_spec(&self) -> &Box<dyn ProtocolSpec> {
             self.inner.get_request_spec()
         }
     
@@ -1232,7 +1223,7 @@ pub mod core {
     }
 
     impl <T> ResponseFactory<T::RESI, T::RESSER, T::RESH, T::RESERRH, > for MapperAwareResponseFactory<T> where T: ProtocolConfig{
-        fn get_response_spec(&self) -> &ListSpec {
+        fn get_response_spec(&self) -> &Box<dyn ProtocolSpec> {
             self.inner.get_response_spec()
         }
     
@@ -1315,7 +1306,7 @@ pub mod core {
             tokio::spawn(async move {
                 loop {
                     let (socket, addr) = tcp_listener.accept().await.unwrap();
-                    println!("Accepted connection from {}", addr);
+                    info!("Accepted connection from {}", addr);
 
                     let _handle = tokio::spawn(async move {
                         self.handle_connection(socket).await;
@@ -1349,19 +1340,20 @@ pub mod core {
             match result {
                 Ok(response_info) => {
                     let serializer = self.response_factory.create_response_serializer();
+                    let spec= self.response_factory.get_response_spec();
                     let result = serializer
                         .serialize_to(
                             response_info,
                             socket,
-                            self.response_factory.get_response_spec(),
+                            spec
                         )
                         .await; 
                     if result.is_err(){
-                        println!("error trying to handle the connection {} ", result.err().unwrap());
+                        warn!("error trying to handle the connection {} ", result.err().unwrap());
                     }
                 }
                 Err(e) => {
-                    println!("Error handling request: {:?}", e);
+                    warn!("Error handling request: {:?}", e);
                 }
             } 
         }
@@ -1375,7 +1367,7 @@ pub mod core {
             
             for listener in &self.listeners {
                 let _result = self.accept_connections(listener).await;
-                println!("hh{:?}", listener);
+                info!("hh{:?}", listener);
             }
 
             Ok(())
@@ -1472,6 +1464,11 @@ pub mod core {
         inner: &'a S
     }
 
+    struct SpecSerializer<'a, S> where S: ProtocolSpec + ?Sized{
+        inner: &'a S
+    }
+
+    
     fn begin<S>(spec:&S, mapper_context:&mut MapperContext) where S: SerializableSpec{
             let spec_type = spec.to_spec_type();
             mapper_context.start_spec_type(spec_type);
@@ -1479,6 +1476,35 @@ pub mod core {
 
     fn end_current_context(mapper_context: &mut MapperContext){
         mapper_context.end_current_spec();
+    }
+
+    async fn serialize<S>(spec: &S, info_provider: & ( dyn InfoProvider + Send + Sync ), 
+        writer: &mut (dyn SpecWrite), 
+        mapper_context: &mut MapperContext) -> Result<(), ParserError>
+        where S: ProtocolSpec + ?Sized{
+            //SpecDeserialize
+        let serialier = SpecSerializer{
+            inner: spec
+        };
+        return serialier.serialize(info_provider, mapper_context, writer).await;
+    }
+
+    #[async_trait]
+    impl<'a, S> SpecSerialize for SpecSerializer<'a, S> where S:ProtocolSpec + ?Sized{
+
+        async fn serialize (
+            &self,
+            info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
+            writer: &mut (dyn SpecWrite),
+        ) -> Result<(), ParserError>{
+            mapper_context.start_spec(self.inner);
+            let result = self.inner.serialize(info_provider, mapper_context, writer).await;
+            let end_spec_result = mapper_context.end_spec(self.inner);
+            if result.is_err(){
+                return result;
+            }
+            return end_spec_result;
+        }
     }
 
     #[async_trait]
@@ -1650,8 +1676,8 @@ pub mod core {
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>{
             let name = self.get_meta_data().get_name().to_name_string();
-            mapper_context.start_spec(self);
-            let result = self.0.serialize(info_provider, mapper_context, writer).await.end_spec(mapper_context, self);
+            //mapper_context.start_spec(self);
+            let result = serialize(&self.0, info_provider, writer, mapper_context).await;//.end_spec(mapper_context, self);
             //let value = info_provider.get_info(&mapper_context.get_last_available_spec_name());
             if !self.2.optional & result.is_err(){
                 //mapper_context.end_spec(self)?;
@@ -1997,8 +2023,7 @@ pub mod core {
                     },
                 };
             }
-            return info_provider.get_mapper_context().end_spec(self)
-            .map(|_| Value::None);
+            return Ok(Value::None);
             
             //// Return appropriate value based on parsing
         
@@ -2014,11 +2039,12 @@ pub mod core {
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>
         {
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             let mut index = 0;
             let mut has_one_success = false;
             loop{
-                let result = self.constituents.serialize(info_provider, mapper_context, writer).await;
+                
+                let result = serialize(&self.constituents, info_provider, writer, mapper_context).await;
                 has_one_success = has_one_success | result.is_ok();
                 if result.is_ok(){
                     index+=1;
@@ -2026,15 +2052,15 @@ pub mod core {
                     continue;
                 }else if !has_one_success && !self.get_meta_data().is_optional()  {
                     
-                    mapper_context.end_spec(self)?;
+                    //mapper_context.end_spec(self)?;
                     self.repeat_count.serialize(info_provider, mapper_context, writer).await?;
                     return result;
                 }else if !has_one_success && self.get_meta_data().is_optional(){
-                    mapper_context.end_spec(self)?;
+                    //mapper_context.end_spec(self)?;
                     self.repeat_count.serialize(info_provider, mapper_context, writer).await?;
                     return Ok(());
                 }else if has_one_success {
-                    mapper_context.end_spec(self)?;
+                    //mapper_context.end_spec(self)?;
                     self.repeat_count.serialize(info_provider, mapper_context, writer).await?;
                     return Ok(());
                 }
@@ -2149,7 +2175,8 @@ pub mod core {
             Self { types: vec!() }
         }
 
-        pub fn start_spec<S>(&mut self, spec: &S) where S: ToSpecType{
+        pub fn start_spec<S>(&mut self, spec: &S) where S: ToSpecType + ?Sized{
+            debug!("starting spec {}", spec.to_spec_type().to_path_string());
             self.start_spec_type(spec.to_spec_type());
         }
 
@@ -2165,9 +2192,9 @@ pub mod core {
 
         pub fn end_spec<S>(&mut self, in_spec: &S) -> Result<(), ParserError> where 
         S: ToSpecType + ?Sized{
-            println!();
-            println!("trying to close spec {:?}, the total spec {:?}", in_spec.to_spec_type(), self.types);
-            println!();
+            debug!("");
+            debug!("trying to close spec {:?}, the total spec {:?}", in_spec.to_spec_type(), self.types);
+            debug!("");
             if let Some(spec_type) = self.types.last(){
                 if &in_spec.to_spec_type() == spec_type {
                     self.types.pop();
@@ -2266,8 +2293,12 @@ pub mod core {
     pub(crate) trait Mapper:  Send + Sync + Debug{
 
         fn get_value_by_key(&self, spec_name: &str) -> Option<&Value>{
+
+            
             let value_path = self.get_mapping_data_template().get(spec_name);
+            
             if let Some(value_path) = value_path{
+                debug!("getting value for key {} -> {}", spec_name, value_path);
                 self.get_spec_data().get(value_path)
             }else{
                 None
@@ -2276,8 +2307,9 @@ pub mod core {
 
         fn get_value_from_key_value_list(&self,key: String, spec_name: &str) -> Option<&Value>{
             let spec_path = self.get_mapping_data_template().get(spec_name);
-
+            
             if let Some(spec_path) = spec_path{
+                debug!("getting value for key {} -> {}", spec_name, spec_path);
                 let key_quick_lookup_name = format!("{}.{}", spec_path, key);
                 let value_path = self.get_mapping_data_template().get(&key_quick_lookup_name);
                 if let Some(value_path) = value_path{
@@ -2332,7 +2364,9 @@ pub mod core {
         }
 
         fn add_simple_data(&mut self, key: String, value: Value) -> Result<(), ParserError>{
+            
             if let Some(template) = self.get_mapping_data_template().get(&key).map(|element| element.to_owned()) {
+                debug!("adding value for key {} -> {}", key, template);
                 self.get_spec_data_mut().insert(template, value);
                 return Ok(())
             }else{
@@ -2363,8 +2397,13 @@ pub mod core {
 
             let key_quick_lookup_name = format!("{}.{}", key_spec_name, key);
 
+
+            debug!("adding value for  {} -> {}", key_quick_lookup_name, value_spec_name);
+
             // Map key to value spec name for quick lookup of value e.g. headers.0.HeaderName.Content-Type -> headers.0.HeaderValue
             self.get_mapping_data_template_mut().insert(key_quick_lookup_name, value_spec_name);
+            
+            
 
             Ok(())
         }
@@ -2378,6 +2417,7 @@ pub mod core {
         }
 
         fn add_mapping_template(&mut self, proto_name: String, spec_name: String) {
+            debug!("adding template for name {} -> {}", proto_name, spec_name);
             self.get_mapping_data_template_mut().insert(proto_name, spec_name.clone());
         }
 
@@ -2472,10 +2512,10 @@ pub mod core {
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>
         {
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             let name = self.get_meta_data().get_name();            
             let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());
-            write_data(name.to_name_string(), value, self.get_meta_data().is_optional(), writer).await.end_spec(mapper_context, self)?;
+            write_data(name.to_name_string(), value, self.get_meta_data().is_optional(), writer).await?;
             if let Separator::Delimiter(delimiter) = &self.until{
                 writer.write(delimiter.as_bytes()).await?;
             }
@@ -2549,16 +2589,16 @@ pub mod core {
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>
         {   
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
 
             let name = self.get_meta_data().get_name().to_name_string();
             if let SpecName::Delimiter = self.get_meta_data().get_name() {
                 write_data(name, Some(&Value::String(self.input.to_owned())), 
                     self.get_meta_data().is_optional(), 
-                    writer).await.end_spec(mapper_context, self)?;
+                    writer).await?;
             }else{
                 let value = info_provider.get_info(&mapper_context.get_current_spec_path());
-                write_data(name, value, self.get_meta_data().is_optional(), writer).await.end_spec(mapper_context, self)?;
+                write_data(name, value, self.get_meta_data().is_optional(), writer).await?;
             }
             
             
@@ -2625,11 +2665,13 @@ pub mod core {
             writer: &mut (dyn SpecWrite),            
         ) -> Result<(), ParserError>
         {
-            mapper_context.start_spec(self);
-            self.key.serialize(info_provider, mapper_context, writer).await.end_spec(mapper_context, self)?;
+            //mapper_context.start_spec(self);
+            serialize(&self.key, info_provider, writer, mapper_context).await?;
+            //self.key.serialize(info_provider, mapper_context, writer).await?;
 
-            mapper_context.start_spec(self);
-            self.value.serialize(info_provider, mapper_context, writer).await.end_spec(mapper_context, self)?;
+            serialize(&self.value, info_provider, writer, mapper_context).await?;
+            //mapper_context.start_spec(self);
+            //self.value.serialize(info_provider, mapper_context, writer).await?;
 
 
             //self.key.serialize(info_provider, writer).await?;
@@ -2746,10 +2788,10 @@ pub mod core {
         ) -> Result<(), ParserError>
         {
             
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             let name = self.get_meta_data().get_name().to_name_string();
             let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());
-            write_data(name, value, self.get_meta_data().is_optional(), writer).await.end_spec(mapper_context, self)?;
+            write_data(name, value, self.get_meta_data().is_optional(), writer).await?;
             Ok(())
         }
     }
@@ -2803,9 +2845,9 @@ pub mod core {
         ) -> Result<(), ParserError>
         {
             let name = self.get_meta_data().get_name().to_name_string();                        
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());
-            write_data(name, value, self.get_meta_data().is_optional(), writer).await.end_spec(mapper_context, self)?;
+            write_data(name, value, self.get_meta_data().is_optional(), writer).await?;
             Ok(())
         }
     }
@@ -2903,9 +2945,9 @@ pub mod core {
         ) -> Result<(), ParserError>
         {
             let name = self.get_meta_data().get_name().to_name_string();                        
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());
-            write_data(name, value, self.get_meta_data().is_optional(), writer).await.end_spec(mapper_context, self)?;
+            write_data(name, value, self.get_meta_data().is_optional(), writer).await?;
             if let Separator::Delimiter(delimiter) = &self.until{
                 writer.write(delimiter.as_bytes()).await?;
             }
@@ -2932,14 +2974,14 @@ pub mod core {
             let mut has_one_success = false;
             for constituent in &self.constituents {   
                 let result = undoable_deserialize(constituent, info_provider, reader, update_info).await;
-                println!("deserializing {}", constituent.get_meta_data().get_name());
+                debug!("deserializing {}", constituent.get_meta_data().get_name());
                 match result{
                     Ok(_) => {
                         has_one_success = true;
                         continue;
                     },
                     Err(ref e) => {
-                        println!("{} is optional? {}, {}", constituent.get_meta_data().get_name(), constituent.get_meta_data().is_optional(),e);
+                        debug!("{} is optional? {}, {}", constituent.get_meta_data().get_name(), constituent.get_meta_data().is_optional(),e);
                         has_one_success = has_one_success | false;
                         if constituent.get_meta_data().is_optional() {
                             continue;
@@ -2965,17 +3007,20 @@ pub mod core {
             writer: &mut (dyn SpecWrite),            
         ) -> Result<(), ParserError>
         {
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             for constituent in &self.constituents {                
                 //mapper_context.start_spec(constituent);
-                let result = constituent.serialize(info_provider, mapper_context, writer).await;
-                println!("error is {:?}", result);
+                let result = serialize(constituent, info_provider, writer, mapper_context).await;
+                debug!("error is {:?}", result);
+
+                debug!("error is {} {} {}", constituent.get_meta_data().get_name().to_path_string(), constituent.get_meta_data().is_optional(), result.is_err());
+                
                 if result.is_err() && !constituent.get_meta_data().is_optional() {
-                    mapper_context.end_spec(self)?;
+                    //mapper_context.end_spec(self)?;
                     return result;
                 }
             };
-            mapper_context.end_spec(self)?;
+            //mapper_context.end_spec(self)?;
             Ok(()) // or some other appropriate return value
         }
     }
@@ -3048,11 +3093,11 @@ pub mod core {
             writer: &mut (dyn SpecWrite),            
         ) -> Result<(), ParserError>
         {
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             //let name = self.1.get_name().to_name_string();
             //let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());
             //write_data(name, value, self.1.optional, writer).await.anyway(mapper_context)?;
-            self.0.serialize(info_provider, mapper_context, writer).await.end_spec(mapper_context, self)?;            
+            serialize(&self.0, info_provider,  writer, mapper_context).await?;            
             Ok(())
             
         }
@@ -3119,8 +3164,8 @@ pub mod core {
             writer: &mut (dyn SpecWrite),            
         ) -> Result<(), ParserError>
         {
-            mapper_context.start_spec(self);
-            self.0.serialize(info_provider, mapper_context, writer).await.end_spec(mapper_context, self)?;
+            //mapper_context.start_spec(self);
+            serialize(&self.0, info_provider, writer, mapper_context).await?;//.end_spec(mapper_context, self)?;
             Ok(())
         }
     }
@@ -3371,9 +3416,9 @@ pub mod core {
         ) -> Result<(), ParserError>
         {
             let name = self.get_meta_data().get_name().to_name_string();
-            mapper_context.start_spec(self);
+            //mapper_context.start_spec(self);
             let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());            
-            write_data(name, value, self.get_meta_data().optional, writer).await.end_spec(mapper_context, self)?;
+            write_data(name, value, self.get_meta_data().optional, writer).await?;//.end_spec(mapper_context, self)?;
             Ok(())
         }
     }
@@ -3574,15 +3619,19 @@ pub mod core {
     }
 
     pub fn new_spec_builder(name: SpecName)-> ProtoSpecBuilderData<BuildFromScratch>{
+        ProtoSpecBuilderData::<BuildFromScratch>::new_with(name, true)
+    }
+
+    pub fn new_mandatory_spec_builder(name: SpecName)-> ProtoSpecBuilderData<BuildFromScratch>{
         ProtoSpecBuilderData::<BuildFromScratch>::new_with(name, false)
     }
 
     impl <S> ProtoSpecBuilderData<S> where S:BuilderState {
-        pub fn new_with_state(state: S, name: SpecName) -> Self {
+        pub fn new_with_state(state: S, name: SpecName, optional: bool) -> Self {
             ProtoSpecBuilderData {
                 composite_spec: ListSpec { 
                     spec_meta_data: {
-                        SpecMetaData::new(name, ValueType::None, true)
+                        SpecMetaData::new(name, ValueType::None, optional)
                     },
                     constituents: Vec::new() 
                 },
@@ -3591,16 +3640,16 @@ pub mod core {
         }
 
         pub fn new() -> Self {
-            ProtoSpecBuilderData::new_with_state(S::default(), SpecName::Name("Default".to_owned()))
+            ProtoSpecBuilderData::new_with_state(S::default(), SpecName::Name("Default".to_owned()), true)
         }        
 
         pub fn new_with(name: SpecName, optional: bool) -> Self {
-            let mut result = ProtoSpecBuilderData::new_with_state(S::default(), name);
+            let mut result = ProtoSpecBuilderData::new_with_state(S::default(), name, optional);
             result
         }
 
         pub fn new_from_scratch(name: SpecName, optional: bool) -> ProtoSpecBuilderData<BuildFromScratch> {
-            let mut result = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), name);
+            let mut result = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), name, true);
             result
         }
 
@@ -3968,7 +4017,7 @@ pub mod core {
 
     fn test(){
         //let t: ProtoSpecBuilderData<BuildKeyAvailable> = ProtoSpecBuilderData::new(BuildFromScratch::default()).expect_u16("rar".to_owned(), true);
-         let t= ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), SpecName::NoName);
+         let t= ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), SpecName::NoName, true);
             let t = t.key_follows(SpecName::Name("keyname".to_string()), false);
             let t = t.expect_string(SpecName::NoName, true)
             .delimited_by_newline()
@@ -4296,7 +4345,7 @@ mod tests {
     
 
     fn test_string_placeholder(){
-        let mut spec_builder = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), crate::core::SpecName::NoName);
+        let mut spec_builder = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), crate::core::SpecName::NoName, true);
         let spec = spec_builder.expect_string(crate::core::SpecName::NoName, false);
         let spec = spec.delimited_by_space();
                        
@@ -4304,7 +4353,7 @@ mod tests {
 
     #[test]
     fn test_protocol_spec_builder() {
-        let mut spec_builder = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), crate::core::SpecName::NoName);
+        let mut spec_builder = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), crate::core::SpecName::NoName, true);
 
 
         let spec_builder = spec_builder.inline_value_follows(crate::core::SpecName::Name("key-1".to_owned()), false);
@@ -4314,6 +4363,8 @@ mod tests {
 #[cfg(test)]
 mod test_utils {
     use std::collections::HashMap;
+
+    use tracing::warn;
 
     use crate::{core::{InfoProvider, Mapper, RequestInfo, Value}, mapping_extractor::DefaultMapper};
 
@@ -4329,7 +4380,7 @@ mod test_utils {
                 assert!(false);
             }
             Err(e) => {
-                println!("Error occured{}", e.to_string());
+                warn!("Error occured{}", e.to_string());
                 assert!(false);
             }
         }
