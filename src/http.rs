@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::to_string;
 
 
-use crate::core::*;
-use crate::mapping_extractor::{traverse_spec, DefaultMapper, SpecTraverse, ToSpecType};
+use crate::common::*;
+/* use crate::core::*;
+use crate::mapping_extractor::{traverse_spec, DefaultMapper, SpecTraverse, ToSpecType}; */
 
 
 use paste::paste;
-use std::collections::HashMap;
 use std::io::Error;
 use std::str::{self, from_utf8, Utf8Error};
 use crate::core::SpecName::*;
@@ -39,7 +39,10 @@ macro_rules! create_header_getter_setters {
         $(
             paste! {
                 fn [ <set_ $method_suffix >](&mut self, value: $type) {
-                    self.add_info($header.to_string(), create_value_type!($type, value));
+                    let result = self.add_info($header.to_string(), create_value_type!($type, value));
+                    if result.is_err(){
+                        panic!("error setting value {} ", $header.to_string());
+                    }
                 }
 
                 create_header_getters!(
@@ -249,22 +252,13 @@ macro_rules! impl_response_info_and_builder {
 }
 
 pub struct HttpRequestInfo {
-    request_type: Value,
-    headers: HashMap<String, Value>,
-    protocol_version: Option<Value>,
-    request_uri: Option<Value>,
-    request_body: Option<Value>,
     mapper: Box<dyn Mapper>,
 }
 
 impl Default for HttpRequestInfo {
     fn default() -> Self {
         HttpRequestInfo {
-            request_type: Value::String("GET".to_string()),
-            headers: Default::default(),
-            protocol_version: None,
-            request_uri: None,
-            request_body: Default::default(),
+            
             mapper: Box::new(DefaultMapper::new()),
         }
     }
@@ -278,27 +272,23 @@ impl RequestInfo for HttpRequestInfo {
 struct HttpRequestBuilder(HttpRequestInfo);
 
 pub struct HttpResponseInfo {
-    status_code: Value,
-    status_text: Value,
-    headers: HashMap<String, Value>,
-    protocol_version: Option<Value>,
-    response_body: Option<Value>,
     mapper: Box<dyn Mapper>,
 }
 
 
 impl ResponseInfo for HttpResponseInfo {
-    fn add_defaults(&mut self) {
+    fn add_defaults(&mut self) -> Result<(), ParserError>{
         /*status_code: Value::String("200".to_string()),
             headers: HashMap::new(),
             protocol_version: Some(Value::String("HTTP/1.1".to_string())),
             status_text: Value::String("OK".to_string()),
             response_body: Default::default(),*/
         let now: DateTime<Utc> = Utc::now();
-        self.add_info("status_code".to_owned(), Value::String("200".to_string()));
-        self.add_info("protocol_version".to_owned(), Value::String("HTTP/1.1".to_string()));
-        self.add_info("status_text".to_owned(), Value::String("OK".to_string()));
-        self.add_info("Date".to_owned(), Value::String(now.format("%a %d %b %Y %H %M %S GMT").to_string()));
+        self.add_info("status_code".to_owned(), Value::String("200".to_string()))?;
+        self.add_info("protocol_version".to_owned(), Value::String("HTTP/1.1".to_string()))?;
+        self.add_info("status_text".to_owned(), Value::String("OK".to_string()))?;
+        self.add_info("Date".to_owned(), Value::String(now.format("%a %d %b %Y %H %M %S GMT").to_string()))?;
+        Ok(())
     }
 }
 
@@ -308,11 +298,6 @@ impl Default for HttpResponseInfo {
         
         
         let mut response = HttpResponseInfo {
-            status_code: Value::String("200".to_string()),
-            headers: HashMap::new(),
-            protocol_version: Some(Value::String("HTTP/1.1".to_string())),
-            status_text: Value::String("OK".to_string()),
-            response_body: Default::default(),
             mapper: Box::new(DefaultMapper::new()),
         };
         response
@@ -585,8 +570,8 @@ impl ResponseFactory<HttpResponseInfo, DefaultSerializer, HttpResponseHandler, H
         &self.response_spec
     }
 
-    fn create_response_info(&self) -> HttpResponseInfo {
-        HttpResponseInfo::default()
+    fn create_response_info(&self) -> Result<HttpResponseInfo, ParserError> {
+        Ok(HttpResponseInfo::default())
     }
 
     fn create_response_serializer(&self) -> DefaultSerializer {
@@ -640,16 +625,17 @@ impl InfoProvider for HttpResponseInfo {
         }
     }
 
-    fn add_info(&mut self, key: String, value: Value) {
+    fn add_info(&mut self, key: String, value: Value)  -> Result<(), ParserError>  {
         match key.as_str() {
             "status_text" | "protocol_version"|"status_code"|"response_body"   => {
-                self.get_mapper_mut().add_simple_data(key, value);
+                self.get_mapper_mut().add_simple_data(key, value)?;
             }
             _ => {
                 //self.headers.insert(key.to_string(), value);
-                self.get_mapper_mut().add_to_key_value_list(key, value, "header_name".to_string(), "header_value".to_string());
+                self.get_mapper_mut().add_to_key_value_list(key, value, "header_name".to_string(), "header_value".to_string())?
             }
         }
+        Ok(())
     }
     
     fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper> {
@@ -675,16 +661,17 @@ impl InfoProvider for HttpRequestInfo {
         }
     }
 
-    fn add_info(&mut self, key: String, value: Value) {
+    fn add_info(&mut self, key: String, value: Value)  -> Result<(), ParserError>  {
         match key.as_str() {
             "request_method" | "protocol_version" | "request_uri" | "request_body" => {
-                self.get_mapper_mut().add_simple_data(key, value);
+                self.get_mapper_mut().add_simple_data(key, value)?;
             }
             _ => {
                 //self.headers.insert(key.to_string(), value);
-                self.get_mapper_mut().add_to_key_value_list(key, value, "header_name".to_string(), "header-value".to_string());
+                self.get_mapper_mut().add_to_key_value_list(key, value, "header_name".to_string(), "header-value".to_string())?;
             }
         }
+        Ok(())
     }
 
     
@@ -698,12 +685,7 @@ impl InfoProvider for HttpRequestInfo {
     }
 }
 
-impl HttpRequestInfo {
-    #![allow(unused)]
-    fn set_request_type(&mut self, request_type: String) {
-        self.request_type = Value::String(request_type);
-    }
-}
+
 
 impl From<std::io::Error> for ParserError {
     fn from(error: Error) -> Self {
@@ -834,7 +816,6 @@ impl Spec for BodySpec{
     }
 }
 
-use crate::core::Anyway;
 #[async_trait]
 impl SpecSerialize for BodySpec{
 

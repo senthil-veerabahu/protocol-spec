@@ -10,9 +10,7 @@ async fn main() {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env().add_directive(Level::DEBUG.into()))
-        .init();
-    let a = 10u32;
-    let b = a.to_be_bytes();
+        .init();    
     let mut http_server_builder =   
     protocol_spec::core::ServerInstanceBuilder::<HttpConfig>::default();
     http_server_builder = http_server_builder

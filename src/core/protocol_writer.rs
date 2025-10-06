@@ -313,14 +313,10 @@ mod tests {
     //#![debugger_visualizer(natvis_file = "../Foo.natvis")]    
     use std::collections::HashMap;
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use crate::core::protocol_writer::ProtocolBuffWriter;
-    use crate::core::PlaceHolderIdentifier::{InlineKeyWithValue, Name};
     use crate::core::{
-        new_spec_builder, CustomSpecBuilder, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, Mapper, ProtoSpecBuilder, RepeatBuilder, StringSpecBuilder, Value, ValueBuilder
+        InfoProvider, Mapper, ParserError, Value
     };
-    use crate::http::BodySpec;
     use crate::mapping_extractor::DefaultMapper;
     
 
@@ -332,18 +328,10 @@ mod tests {
         }
     }
 
-    impl TestRequestInfo {
-        pub fn new() -> Self {
-            let mut r = TestRequestInfo(HashMap::new(), Box::new(DefaultMapper::new()));
-            r.0.insert("data".to_owned(), Value::String("test".to_string()));
-            r.0.insert("data1".to_owned(), Value::String("test1".to_string()));
-            return r;
-        }
-    }
-
     impl InfoProvider for TestRequestInfo {
-        fn add_info(&mut self, key: String, value: Value) {
+        fn add_info(&mut self, key: String, value: Value) -> Result<(), ParserError> {
             self.0.insert(key, value);
+            Ok(())
         }
 
         fn get_info(&self, key: &String) -> Option<&crate::core::Value> {            

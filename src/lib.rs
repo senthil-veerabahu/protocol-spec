@@ -1,18 +1,39 @@
 
+pub mod common{
+
+    pub use crate::mapping_extractor::{SpecTraverse, traverse_spec, ToSpecType, DefaultMapper};
+
+    pub use crate::core::{SpecMapper, Spec, SpecMetaData, MapperContext, ProtocolSpec, AllBytesSpec, 
+        DelimitedSpec, DelimitedStringSpec, OneOfSpec, NumberI16Spec, NumberI64Spec,
+        NumberU16Spec, NumberU32Spec, NumberU64Spec, ListSpec, SimpleValueSpec,RepeatManySpec, NBytesSpec, 
+        SpecRead, SpecWrite, Value, InfoProvider,
+         Mapper, RequestInfo, ResponseInfo, ParserError, 
+         RequestHandler, ResponseHandler, RequestFactory, ResponseFactory, RequestErrorHandler, ResponseErrorHandler, RequestSerializer, ResponseSerializer, DefaultSerializer,
+        ProtocolConfig, ProtoSpecBuilderData, BuildFromScratch,
+        InlineValueBuilder, KeySpecBuilder, RepeatBuilder, DelimitedStringSpecBuilder, 
+        NumberSpecBuilder, DelimiterBuilder, ProtoSpecBuilder, ValueBuilder, CompositeBuilder, CustomSpecBuilder, 
+        new_mandatory_spec_builder, Separator,
+        SpecName, ValueType,  ValueExtractor, SpecSerialize, SpecDeserialize};
+
+    
+
+
+}
+
 //#![debugger_visualizer(natvis_file = "./Foo.natvis")]
-pub(crate) mod mapping_extractor{
+mod mapping_extractor{
     use std::collections::HashMap;
 
 
 
     use tracing::debug;
 
-    use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, ParserError, RepeatManySpec, RepeaterContext, SimpleValueSpec, Spec, SpecMapper, SpecName, SpecType, Value, ValueSpec};
+    use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, ParserError, ProtocolSpec, RepeatManySpec, RepeaterContext, SimpleValueSpec, Spec, SpecMapper, SpecType, Value, ValueSpec};
 
      
 
     pub trait SpecTraverse{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>);
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError>;
     }
 
     #[derive(Clone, Default, Debug)]
@@ -135,13 +156,13 @@ pub(crate) mod mapping_extractor{
     }
 
     impl  SpecTraverse for Key{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl <S> SpecTraverse for S where S:SimpleValueSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>)  -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
@@ -159,7 +180,7 @@ pub(crate) mod mapping_extractor{
     } */
 
     impl  SpecTraverse for ValueSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
@@ -177,38 +198,34 @@ pub(crate) mod mapping_extractor{
     } */
 
     impl  SpecTraverse for KeyValueSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl SpecTraverse for RepeatManySpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper);
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+            traverse_spec(self, mapper)
         }
     }
 
     impl SpecTraverse for InlineKeyWithValue{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper);
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+            traverse_spec(self, mapper)
         }
     }
 
     //TODO change the return value to Result instead of unit
-    pub(crate) fn traverse_spec<S>(spec: &S, mapper: &mut Box<dyn Mapper>) where S:MappableSpec + ?Sized{
-        let meta_data = spec.get_meta_data();
-            //if let SpecName::Name(_) = meta_data.get_name(){
-                mapper.get_mapper_context_mut().start_spec_type(spec.to_spec_type());    
-                spec.add_mapping_template(mapper);
-                mapper.get_mapper_context_mut().end_spec(spec);
-            /* }else{
-                spec.add_mapping_template(mapper);
-            } */
+    pub fn traverse_spec<S>(spec: &S, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> where S:MappableSpec + ?Sized{
+        mapper.get_mapper_context_mut().start_spec_type(spec.to_spec_type());    
+        spec.add_mapping_template(mapper)?;
+        return mapper.get_mapper_context_mut().end_spec(spec);
+        
     }
 
     impl SpecTraverse for ListSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper);
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+            traverse_spec(self, mapper)
         }
     }
 
@@ -220,8 +237,8 @@ pub(crate) mod mapping_extractor{
 
     impl SpecMapper for InlineKeyWithValue{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>)->Result<(), ParserError>  {
-            self.0.traverse(mapper);
-            Ok(())
+            self.0.traverse(mapper)
+            
             /* let key_name = &self.1;
             let path = mapper.get_mapper_context_mut().get_current_spec_path_template();
             mapper.add_mapping_template(key_name.to_owned(), path); */
@@ -230,8 +247,7 @@ pub(crate) mod mapping_extractor{
    
     impl SpecMapper for RepeatManySpec{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError>  {
-            self.constituents.traverse(mapper);
-            Ok(())
+            self.constituents.traverse(mapper)
         }
     }
 
@@ -256,16 +272,7 @@ pub(crate) mod mapping_extractor{
 
     impl SpecMapper for ValueSpec{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
-            self.0.traverse(mapper);
-            Ok(())
-            /* let key_name = self.1.get_name();
-            if let SpecName::Name(name) = key_name{
-                mapper.get_mapper_context_mut().start_spec_type(SpecType::Simple(key_name.clone()));
-                
-                mapper.get_mapper_context_mut().end_current_spec();
-            }else{
-                &self.0.traverse(mapper);
-            } */
+            self.0.traverse(mapper)
         }
     }
 
@@ -309,14 +316,7 @@ pub(crate) mod mapping_extractor{
 
     impl SpecMapper for Key{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError>  {
-
-            self.0.traverse(mapper);
-            Ok(())
-            /* let path = mapper.get_mapper_context_mut().get();
-                mapper.add_mapping_template(name.to_owned(), path); */
-            /* if let SpecName::Name(name) = self.get_meta_data().get_name(){
-                
-            } */
+            self.0.traverse(mapper)
         }   
     }
 
@@ -324,13 +324,17 @@ pub(crate) mod mapping_extractor{
 
     impl SpecMapper for ListSpec{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError> {
-            self.constituents.iter().for_each(|s| s.traverse(mapper));
-            Ok(())
+            return self.constituents
+            .iter()
+            .fold(Ok(()), |result: Result<(), ParserError>, element: &Box<dyn ProtocolSpec>|
+             result.and_then(|_| {
+                element.traverse(mapper)
+            }));
+            
         }
     }
 
 }
-
 
 
 pub mod core {
@@ -350,9 +354,7 @@ pub mod core {
     
     
     use std::collections::HashMap;
-    use std::fmt::format;
     use std::marker::PhantomData;
-    use std::string::ParseError;
     use std::{
         fmt::{Debug, Display, Formatter}, mem::{self}, str::Utf8Error
     };
@@ -808,8 +810,8 @@ pub mod core {
         #[allow(unused)]
         fn get_keys_by_group_name(&self, name: String) -> Option<Vec<& String>>; */
 
-        fn add_info(&mut self, key: String, value: Value){
-            self.get_mapper_mut().add_simple_data(key, value);
+        fn add_info(&mut self, key: String, value: Value) -> Result<(), ParserError>{
+            self.get_mapper_mut().add_simple_data(key, value)
         }
 
         #[allow(unused)]
@@ -833,7 +835,7 @@ pub mod core {
     }
 
     #[derive(Clone, Debug)]
-    pub(crate) struct RepeaterContext{
+    pub struct RepeaterContext{
         count: u32
     }
 
@@ -851,10 +853,6 @@ pub mod core {
             self.count+=1;
             return self.count;
         }
-
-        fn reset(&mut self) {
-            self.count = 0;
-        }
     }
 
 
@@ -866,7 +864,7 @@ pub mod core {
     }
 
     pub trait ResponseInfo: InfoProvider {
-        fn add_defaults(&mut self);
+        fn add_defaults(&mut self) -> Result<(), ParserError>;
 
     }
 
@@ -907,7 +905,7 @@ pub mod core {
         RESERRH: ResponseErrorHandler<RESI>,
     {
         fn get_response_spec(&self) -> &Box<dyn ProtocolSpec>;
-        fn create_response_info(&self) -> RESI;
+        fn create_response_info(&self) -> Result<RESI, ParserError>;
         fn create_response_serializer(&self) -> RESS;
         fn create_response_handler(&self) -> RESH;
         fn create_error_response_handler(&self) -> RESERRH;
@@ -1021,13 +1019,13 @@ pub mod core {
 
         async fn deserialize_from<'a, B>(
             &self,
-            mut request_info:  &'a mut REQI,
+            request_info:  &'a mut REQI,
             reader: B,
             spec: &dyn SpecDeserialize,
         )  -> Result<&'a mut REQI, ParserError> 
         where B:AsyncRead + Unpin + Send + Sync  {
             let mut protocol_reader = ProtocolBuffReader::new( BufReader::new(reader), 1024);
-            let parse_result = spec.deserialize(request_info,&mut  protocol_reader, true).await?;
+            spec.deserialize(request_info,&mut  protocol_reader, true).await?;
             /* if let Err(parser_error) = parse_result{
                 if let ParserError::EndOfStream = parser_error  {
                     if request_info.has_all_data() {
@@ -1076,7 +1074,7 @@ pub mod core {
         ) -> Result<&'a mut RESI, ParserError> 
         where R:SpecRead {
             let mut protocol_reader = ProtocolBuffReader::new(reader, 1024);
-            let parse_result = spec.deserialize(response_info,&mut  protocol_reader, true).await?;
+            spec.deserialize(response_info,&mut  protocol_reader, true).await?;
            //todo handle the above
             Ok(response_info)
         }        
@@ -1183,7 +1181,10 @@ pub mod core {
         fn new(inner: T::REQF) -> Self{
             
             let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
-            inner.get_request_spec().traverse(&mut mapper);
+            let result = inner.get_request_spec().traverse(&mut mapper);
+            if result.is_err(){
+                panic!("unexpected error while parsing request spec {}", result.unwrap_err());
+            }
             Self { inner, mapper }
         }
     }
@@ -1217,7 +1218,10 @@ pub mod core {
         fn new(inner: T::RESF) -> Self{
             
             let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
-            inner.get_response_spec().traverse(&mut mapper);
+            let result = inner.get_response_spec().traverse(&mut mapper);
+            if result.is_err(){
+                panic!("unexpected error while parsing response spec {}", result.unwrap_err());
+            }
             Self { inner, mapper }
         }
     }
@@ -1227,11 +1231,11 @@ pub mod core {
             self.inner.get_response_spec()
         }
     
-        fn create_response_info(&self) -> T::RESI {
-            let mut response_info = self.inner.create_response_info();
+        fn create_response_info(&self) -> Result<T::RESI, ParserError> {
+            let mut response_info = self.inner.create_response_info()?;
             self.mapper.get_mapping_data_template().clone_into(response_info.get_mapper_mut().get_mapping_data_template_mut());
-            response_info.add_defaults();
-            response_info            
+            response_info.add_defaults()?;
+            Ok(response_info)           
 
         }
     
@@ -1309,16 +1313,19 @@ pub mod core {
                     info!("Accepted connection from {}", addr);
 
                     let _handle = tokio::spawn(async move {
-                        self.handle_connection(socket).await;
+                        let result = self.handle_connection(socket).await;
+                        if result.is_err(){
+                            warn!("error handing request from addr {}, {}", addr.ip(), result.unwrap_err());
+                        }
                     });
                 }
             });
         }
 
-        async fn handle_connection(&'static self, mut socket: TcpStream) {
+        async fn handle_connection(&'static self, mut socket: TcpStream) -> Result<(), ParserError> {
             let mut req_info = self.request_factory.create_request_info();
             let serializer = self.request_factory.create_request_serializer();            
-            let mut res_info = self.response_factory.create_response_info();
+            let mut res_info = self.response_factory.create_response_info()?;
             
             
             
@@ -1330,8 +1337,7 @@ pub mod core {
                     &mut buf_reader,
                     self.request_factory.get_request_spec(),
                 )
-                .await
-                .unwrap(); 
+                .await?; 
             let result = CFG::REQH::handle_request(
                 &self.request_factory.create_request_handler(),
                 &request_info,
@@ -1341,19 +1347,17 @@ pub mod core {
                 Ok(response_info) => {
                     let serializer = self.response_factory.create_response_serializer();
                     let spec= self.response_factory.get_response_spec();
-                    let result = serializer
+                    return serializer
                         .serialize_to(
                             response_info,
                             socket,
                             spec
                         )
-                        .await; 
-                    if result.is_err(){
-                        warn!("error trying to handle the connection {} ", result.err().unwrap());
-                    }
+                        .await;
                 }
                 Err(e) => {
                     warn!("Error handling request: {:?}", e);
+                    return Err(e);
                 }
             } 
         }
@@ -1439,8 +1443,6 @@ pub mod core {
     }
     }
 
-    fn is_send<T:Send>(t: T){}
-    
     #[allow(dead_code)]
     trait TokenParser {
         async fn read_string(until_delimiter: String) -> String;
@@ -1557,7 +1559,7 @@ pub mod core {
         fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Composite(l0), Self::Composite(r0)) => l0 == r0,
-            (Self::RepeatMany(l0, l1, l2), Self::RepeatMany(r0, r1, r2)) => l0 == r0,
+            (Self::RepeatMany(l0, _l1, _l2), Self::RepeatMany(r0, _r1, _r2)) => l0 == r0,
             (Self::Key(l0), Self::Key(r0)) => l0 == r0,
             (Self::Value(l0), Self::Value(r0)) => l0 == r0,
             (Self::Simple(l0), Self::Simple(r0)) => l0 == r0,
@@ -1591,16 +1593,7 @@ pub mod core {
         }
     }
 
-    struct SpecContext{
-        contexts: Vec<SpecType>,
-    }
-
-    impl SpecContext{
-        fn new()->Self{
-            Self { contexts: vec!() }
-        }
-    }
-
+    
     #[async_trait]
         pub trait  SpecSerialize: Send + Sync/* :Spec */{
         async fn serialize (
@@ -1609,10 +1602,6 @@ pub mod core {
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>;
         
-    }
-
-    struct SpecData{
-        data: HashMap<String, Value>
     }
 
     #[derive(PartialEq, Clone, Debug)]
@@ -1675,13 +1664,8 @@ pub mod core {
             info_provider: &( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>{
-            let name = self.get_meta_data().get_name().to_name_string();
-            //mapper_context.start_spec(self);
-            let result = serialize(&self.0, info_provider, writer, mapper_context).await;//.end_spec(mapper_context, self);
-            //let value = info_provider.get_info(&mapper_context.get_last_available_spec_name());
-            if !self.2.optional & result.is_err(){
-                //mapper_context.end_spec(self)?;
-                //return Err(ParserError::MissingData(name.to_owned()));
+            let result = serialize(&self.0, info_provider, writer, mapper_context).await;
+            if !self.1.optional & result.is_err(){
                 return result;
             }
             return Ok(())
@@ -1703,11 +1687,11 @@ pub mod core {
             let result = spec.deserialize(info_provider, reader,update_info).await;            
             match result {
                 Ok(value_type) => {
-                    reader.reset(&marker);
+                    reader.reset(&marker)?;
                     return Ok(value_type);                    
                 }
                 Err(e) => {
-                    reader.reset(&marker);
+                    reader.reset(&marker)?;
                     return Err(e);
                 }
             }        
@@ -1747,7 +1731,7 @@ pub mod core {
             let result = self.inner.deserialize(info_provider, reader,update_info).await;            
             match result {
                 Ok(value_type) => {
-                    reader.unmark(&marker);
+                    reader.unmark(&marker)?;
                     return Ok(value_type);                    
                 }
                 Err(e) => {
@@ -1755,11 +1739,15 @@ pub mod core {
                         
                         ParserError::EndOfStream => {
                             let optional = self.inner.inner.get_meta_data().is_optional();
-                            reader.reset(&marker);
+                            if optional{
+                                warn!("EOS reached when trying to parse optional spec {}", self.inner.inner.get_meta_data().get_name().to_path_string());
+                                return Ok(Value::None);
+                            }
+                            reader.reset(&marker)?;
                             return Err(e);
                         }
                         _ => {
-                            reader.reset(&marker);
+                            reader.reset(&marker)?;
                             return Err(e);
                         }
                     }
@@ -1780,23 +1768,7 @@ pub mod core {
         fn default() -> Self {
             Separator::EndOfStream
         }
-    }
-
-    impl Separator{
-        fn is_delimiter(&self) -> bool{
-            match self{
-                Separator::Delimiter(_) => true,
-                _ => false,
-            }
-        }
-
-        fn get_delimiter(&self) -> Option<String>{
-            match self{
-                Separator::Delimiter(delimiter) => Some(delimiter.clone()),
-                _ => None,
-            }
-        }
-    }
+    }   
 
     #[derive( PartialEq)]
     pub struct SpecMetaData{
@@ -1850,7 +1822,7 @@ pub mod core {
         }
     }
 
-    pub(crate) trait SimpleValueSpec: Spec + SpecSerialize + SpecDeserialize + MappableSpec + SpecTraverse + ToSpecType {}
+    pub trait SimpleValueSpec: Spec + SpecSerialize + SpecDeserialize + MappableSpec + SpecTraverse + ToSpecType {}
 
     pub trait DelimitedSpec: SimpleValueSpec + Default{
         fn set_delimiter(&mut self, delimiter: Separator) ;
@@ -1888,7 +1860,7 @@ pub mod core {
     }
 
     #[derive(Clone, Debug, PartialEq)]
-    pub(crate) enum RepeatCount{
+    pub enum RepeatCount{
         Fixed(u32),
         Delimited(Separator),
     }
@@ -1896,7 +1868,7 @@ pub mod core {
     impl RepeatCount{
         async fn serialize (
             &self,
-            info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
+            _info_provider: & ( dyn InfoProvider + Send + Sync ), _mapper_context: &mut MapperContext,
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>{
             match self {
@@ -1931,16 +1903,10 @@ pub mod core {
     }
 
     #[derive(Default)]
-    pub(crate) struct RepeatManySpec{
+    pub struct RepeatManySpec{
         spec_meta_data: SpecMetaData,        
         pub(crate) repeat_count: RepeatCount,
         pub(crate) constituents: ListSpec,
-    }
-
-    impl  RepeatManySpec{
-        fn set_delimiter(&mut self, delimiter: Separator)  {
-            self.repeat_count = RepeatCount::Delimited(delimiter);
-        }
     }
 
     impl Spec for RepeatManySpec{
@@ -2038,16 +2004,13 @@ pub mod core {
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
             writer: &mut (dyn SpecWrite),
         ) -> Result<(), ParserError>
-        {
-            //mapper_context.start_spec(self);
-            let mut index = 0;
+        {                        
             let mut has_one_success = false;
             loop{
                 
                 let result = serialize(&self.constituents, info_provider, writer, mapper_context).await;
                 has_one_success = has_one_success | result.is_ok();
-                if result.is_ok(){
-                    index+=1;
+                if result.is_ok(){                    
                     mapper_context.increment_current_repeat_spec();
                     continue;
                 }else if !has_one_success && !self.get_meta_data().is_optional()  {
@@ -2069,7 +2032,7 @@ pub mod core {
     }
 
 
-    pub(crate) trait Spec: Send + Sync  {
+    pub trait Spec: Send + Sync  {
         fn get_meta_data(&self) -> &SpecMetaData;
     }
 
@@ -2079,13 +2042,13 @@ pub mod core {
         }
     }
 
-    pub(crate) trait SpecMapper{
+    pub trait SpecMapper{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError>;
     }
 
     impl SpecMapper for Box<dyn ProtocolSpec>{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError>  {
-            (**self).add_mapping_template(mapper);
+            (**self).add_mapping_template(mapper)?;
             Ok(())
         }
     }
@@ -2122,8 +2085,8 @@ pub mod core {
     }
 
     impl SpecTraverse for Box<dyn ProtocolSpec>{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            (**self).traverse(mapper);
+        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+            (**self).traverse(mapper)
         }
     }
    
@@ -2136,18 +2099,19 @@ pub mod core {
 
     
 
-    pub(crate) trait ProtocolSpec: SerializableSpec + MappableSpec{        
+    pub trait ProtocolSpec: SerializableSpec + MappableSpec{        
     }
 
     impl <T> ProtocolSpec for T where T: SerializableSpec + MappableSpec{}
 
+    #[allow(dead_code)]
     pub(crate) trait Anyway{
         fn end_current_spec(self, mapper_context: &mut MapperContext) -> Self;
 
         fn end_spec<S>(self, mapper_context: &mut MapperContext,  spec: &S) -> Self where S: ToSpecType + ?Sized;
     }
 
-    impl <R, E> Anyway for Result<R, E> 
+    impl <R> Anyway for Result<R, ParserError> 
     {
         fn end_current_spec(self, mapper_context: &mut MapperContext,  ) -> Self {
             mapper_context.end_current_spec();
@@ -2155,20 +2119,15 @@ pub mod core {
         }
 
         fn end_spec<S>(self, mapper_context: &mut MapperContext,  spec: &S) -> Self where S: ToSpecType + ?Sized{
-            mapper_context.end_spec(spec);
+            mapper_context.end_spec(spec)?;
             self
         }
-    }
-
-    fn end_context(context: &mut MapperContext){
-        context.end_current_spec();
     }
 
     #[derive(Clone, Debug)]
     pub struct MapperContext{
         types: Vec<SpecType>,
-    }
-    fn test_m1<S:SerializableSpec>(s: S){}
+    }    
 
     impl MapperContext{
         pub fn new() -> MapperContext{
@@ -2215,7 +2174,7 @@ pub mod core {
             if let Some( repeater) = last{
                 match repeater{
                     
-                    SpecType::RepeatMany(_, repeat_count, current_index) => {
+                    SpecType::RepeatMany(_, _repeat_count, current_index) => {
                         *current_index += 1;
                     },
                     _ =>{}
@@ -2263,7 +2222,7 @@ pub mod core {
                             _  =>  continue,
                         }
                     }
-                    SpecType::RepeatMany(name, _, current_index) => {
+                    SpecType::RepeatMany(name, _, _current_index) => {
                         match name {
                             SpecName::Name(name) => {
                                 return Some(name.to_owned());
@@ -2290,7 +2249,7 @@ pub mod core {
         qualified_name.replace(format!(".{}",  lookup_name).as_str(), "")
     }
 
-    pub(crate) trait Mapper:  Send + Sync + Debug{
+    pub trait Mapper:  Send + Sync + Debug{
 
         fn get_value_by_key(&self, spec_name: &str) -> Option<&Value>{
 
@@ -2451,12 +2410,12 @@ pub mod core {
     }
 
     impl DelimitedStringSpec{
-        fn new(name: SpecName, delimiter: Separator,  optional: bool) -> Self {
+        /* fn new(name: SpecName, delimiter: Separator,  optional: bool) -> Self {
             DelimitedStringSpec {                
                 spec_meta_data: SpecMetaData::new(name, ValueType::String, optional),
                 until: delimiter,
             }
-        }
+        } */
     }
 
     async fn parse_delimited_string_spec<D:DelimitedSpec>(spec: &D, reader: &mut dyn SpecRead,) -> Result<Value, ParserError>{
@@ -2495,7 +2454,7 @@ pub mod core {
              let value = parse_delimited_string_spec(self, reader).await?;
              if update_info{
                 if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name() {
-                    info_provider.add_info(spec_name, value.clone());
+                    info_provider.add_info(spec_name, value.clone())?;
                 }
                 return Ok(Value::None);
              }
@@ -2527,7 +2486,7 @@ pub mod core {
         }
     }
 
-    pub(crate) struct ExactStringSpec{
+    pub struct ExactStringSpec{
         pub input: String,
         pub spec_meta_data: SpecMetaData,
     }
@@ -2567,7 +2526,7 @@ pub mod core {
                 if update_info && !self.spec_meta_data.get_name().is_delimiter() {
 
                     if let Some(name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                       info_provider.add_info(name, ValueType::parse(&self.get_meta_data().value_type, &value));
+                       info_provider.add_info(name, ValueType::parse(&self.get_meta_data().value_type, &value))?;
                     }
                 }
                 return Ok(ValueType::parse(&self.get_meta_data().value_type, &value));
@@ -2630,17 +2589,10 @@ pub mod core {
         where F: Fn(&Box<dyn Mapper>) -> String,
         S: ProtocolSpec,
         {
-        
-        let (mut spec_name, mut spec_path): (Option<String>, Option<String>) = (None, None);
-
-        /* if let SpecName::Name(name) = spec_meta_data.get_name(){
-            spec_name = Some(name.clone());
-            
-        } */
         mapper.get_mapper_context_mut().start_spec_type(spec.to_spec_type());
         mapper.get_mapper_context_mut().start_spec_type(inner_spec.to_spec_type());
-        spec_name = mapper.get_mapper_context().get_last_available_spec_name();
-        spec_path = Some(
+        let spec_name = mapper.get_mapper_context().get_last_available_spec_name();
+        let spec_path = Some(
                 spec_path_finder(mapper)                
             );
         mapper.get_mapper_context_mut().end_spec(inner_spec)?;
@@ -2712,22 +2664,13 @@ pub mod core {
                 (Some(ref key_spec_path), None) => {
                     info_provider.get_mapper_mut().get_spec_data_mut().insert(key_spec_path.clone(), key_name);
                 },
-                (Some(ref key_spec_path), Some(ref value_spec_path)) => {
+                (Some(ref _key_spec_path), Some(ref _value_spec_path)) => {
                     if update_info{
                         info_provider.get_mapper_mut().add_to_key_value_list(key_name.get_string_value_unchecked().unwrap(),
-                            value, key_spec_name.unwrap(), value_spec_name.unwrap());
+                            value, key_spec_name.unwrap(), value_spec_name.unwrap())?;
                     }
-                    /* let key_spec_template = info_provider.get_mapper_mut().get_mapping_data_template().get(&key_spec_name.unwrap()).unwrap();
-
-                    let key_spec_template_path = format!("{}.{}", key_spec_template, );
-                    info_provider.get_mapper_mut().get_spec_data_mut().insert(value_spec_path.clone(), value);
-                    info_provider.get_mapper_mut().get_spec_data_mut().insert(key_spec_path.clone(), key_name);
-                    info_provider.get_mapper_mut().get_mapping_data_mut().insert(key_spec_path.clone(), value_spec_path.clone());
-                    info_provider.get_mapper_mut().get_mapping_data_mut().insert(key_spec_path.clone(), value_spec_path.clone());
-                    info_provider.get_mapper_mut().get_mapping_data_mut().insert(key_spec_template_path, value_spec_path.clone()); */
                 },
             }
-            
             return Ok(Value::None);            
         }
     }
@@ -2766,7 +2709,7 @@ pub mod core {
             if let Some(bytes) = bytes {
                 if update_info {
                     if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                        info_provider.add_info(spec_name, Value::U8Vec(bytes.clone()));
+                        info_provider.add_info(spec_name, Value::U8Vec(bytes.clone()))?;
                     }
                 }
                 return Ok(ValueType::parse(&self.get_meta_data().value_type, &bytes));
@@ -2798,8 +2741,8 @@ pub mod core {
 
     
 
-    pub(crate) struct AllBytesSpec{     
-        pub spec_meta_data: SpecMetaData,           
+    pub struct AllBytesSpec{     
+        spec_meta_data: SpecMetaData,           
     }
 
     impl Spec for AllBytesSpec{
@@ -2822,7 +2765,7 @@ pub mod core {
             if let Some(bytes) = bytes {
                 if update_info{
                     if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                        info_provider.add_info(spec_name, Value::U8Vec(bytes.clone()));
+                        info_provider.add_info(spec_name, Value::U8Vec(bytes.clone()))?;
                     }
                     return Ok(Value::None)
                 }
@@ -2914,7 +2857,7 @@ pub mod core {
                 if self.values.contains(value) {
                     if update_info{
                         if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                            info_provider.add_info(spec_name, Value::String(value.clone()));
+                            info_provider.add_info(spec_name, Value::String(value.clone()))?;
                         }
                         return Ok(Value::None);
                     }
@@ -3011,9 +2954,13 @@ pub mod core {
             for constituent in &self.constituents {                
                 //mapper_context.start_spec(constituent);
                 let result = serialize(constituent, info_provider, writer, mapper_context).await;
-                debug!("error is {:?}", result);
 
-                debug!("error is {} {} {}", constituent.get_meta_data().get_name().to_path_string(), constituent.get_meta_data().is_optional(), result.is_err());
+                if result.is_err(){
+                    warn!("error when serializing spec: {} optional: is {} error:{:?}",
+                     constituent.get_meta_data().get_name().to_path_string(), constituent.get_meta_data().is_optional(), result);                    
+                }
+
+                
                 
                 if result.is_err() && !constituent.get_meta_data().is_optional() {
                     //mapper_context.end_spec(self)?;
@@ -3066,11 +3013,11 @@ pub mod core {
         }
     }
 
-    pub(crate) struct InlineKeyWithValue(pub Box<dyn ProtocolSpec>, pub String, pub SpecMetaData);
+    pub(crate) struct InlineKeyWithValue(pub Box<dyn ProtocolSpec>, /* pub String, */ pub SpecMetaData);
     
     impl Spec for InlineKeyWithValue {
         fn get_meta_data(&self) -> &SpecMetaData {
-            &self.2
+            &self.1
         }
     }
     
@@ -3182,16 +3129,16 @@ pub mod core {
     }
 
     #[derive(Default)]
-    struct NumberU64Spec(SpecMetaData) ;
+    pub struct NumberU64Spec(SpecMetaData) ;
 
     #[derive(Default)]
-    struct NumberI64Spec(SpecMetaData) ;
+    pub struct NumberI64Spec(SpecMetaData) ;
 
     #[derive(Default)]
-    struct NumberU32Spec(SpecMetaData) ;
+    pub struct NumberU32Spec(SpecMetaData) ;
 
     #[derive(Default)]
-    struct NumberU16Spec(SpecMetaData) ;
+    pub struct NumberU16Spec(SpecMetaData) ;
 
     pub(crate) trait NumberSpec: SimpleValueSpec + Send + Sync{}
 
@@ -3254,7 +3201,7 @@ pub mod core {
 
     
     #[derive(Default)]
-    struct NumberI16Spec(SpecMetaData);
+    pub struct NumberI16Spec(SpecMetaData);
     
     
     #[async_trait]
@@ -3268,7 +3215,7 @@ pub mod core {
             if let Some(bytes) = bytes {
                 if update_info{
                     if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber64, &bytes));
+                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber64, &bytes))?;
                     }
                     return Ok(Value::None);
                 }else {
@@ -3294,7 +3241,7 @@ pub mod core {
             if let Some(bytes) = bytes {
                 if update_info{
                     if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::SignedNumber64, &bytes));
+                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::SignedNumber64, &bytes))?;
                     }
                     return Ok(Value::None);
                 }else {
@@ -3320,7 +3267,7 @@ pub mod core {
             if let Some(bytes) = bytes {
                 if update_info{
                     if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber32, &bytes));
+                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber32, &bytes))?;
                     }
                     return Ok(Value::None);
                 }else {
@@ -3346,7 +3293,7 @@ pub mod core {
             if let Some(bytes) = bytes {
                 if update_info{
                     if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber16, &bytes));
+                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::UnSignedNumber16, &bytes))?;
                     }
                     return Ok(Value::None);
                 }else {
@@ -3372,7 +3319,7 @@ pub mod core {
             if let Some(bytes) = bytes {
                 if update_info{
                     if let Some(spec_name) = info_provider.get_mapper_context().get_last_available_spec_name(){
-                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::SignedNumber16, &bytes));
+                        info_provider.add_info(spec_name, ValueType::parse(&ValueType::SignedNumber16, &bytes))?;
                     }
                     return Ok(Value::None);
                 }else {
@@ -3501,18 +3448,10 @@ pub mod core {
         }
     } */
 
-    pub(crate)  trait ByteSpecGenerator{
-        fn get_bytes_spec_of_size(&mut self, name: SpecName, size:u32, optional: bool) -> NBytesSpec{
-            NBytesSpec::new(name, size, optional)
-        }
-    }
-
-    pub(crate) trait BuilderState:Default{}
-
-    pub(crate) trait BuildGenericString:BuilderState{}
-
-    pub(crate) trait BuildKeyString:BuilderState{}
     
+    pub trait BuilderState:Default{}
+
+    pub trait BuildGenericString:BuilderState{}
 
     // Builder States
 
@@ -3536,8 +3475,7 @@ pub mod core {
     }
 
     #[derive(Default)]
-    pub struct BuildInlineValue{
-        key_name: String,
+    pub struct BuildInlineValue{        
         value_spec_metadata: SpecMetaData,
     }
     
@@ -3552,7 +3490,7 @@ pub mod core {
     impl  BuilderState for BuildFromScratch{}
     impl  BuildGenericString for BuildFromScratch{}
     impl  BuilderState for BuildKey{}
-    impl  BuildKeyString for BuildKey{}
+    //impl  BuildKeyString for BuildKey{}
     impl  BuilderState for BuildValue{}
     impl  BuilderState for BuildKeyAvailable{}
     impl  BuilderState for BuildInlineValue{}
@@ -3575,7 +3513,7 @@ pub mod core {
 
     // Struct implementing Spec Builder 
     #[derive(Default)]
-    pub(crate) struct ProtoSpecBuilderData<S:BuilderState>{
+    pub struct ProtoSpecBuilderData<S:BuilderState>{
         composite_spec: ListSpec,
         state: S,
     }
@@ -3644,20 +3582,19 @@ pub mod core {
         }        
 
         pub fn new_with(name: SpecName, optional: bool) -> Self {
-            let mut result = ProtoSpecBuilderData::new_with_state(S::default(), name, optional);
+            let result = ProtoSpecBuilderData::new_with_state(S::default(), name, optional);
             result
         }
 
         pub fn new_from_scratch(name: SpecName, optional: bool) -> ProtoSpecBuilderData<BuildFromScratch> {
-            let mut result = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), name, true);
-            result
+            ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), name, optional)
         }
 
     }
     
     //Generators
 
-    pub(crate) trait NumberSpecGenerator {
+    pub trait NumberSpecGenerator {
         fn get_u16_spec(&self, name: SpecName, optional: bool) -> NumberU16Spec{
             NumberU16Spec(SpecMetaData::new(name, ValueType::UnSignedNumber16, optional))       
         }
@@ -3675,33 +3612,16 @@ pub mod core {
         }
     }
 
-    pub(crate) trait StringSpecGenerator{
+    pub trait StringSpecGenerator{
         fn get_string_spec(&self, name: SpecName, optional: bool) -> DelimitedStringSpec where  Self:Sized{
             DelimitedStringSpec { 
                 spec_meta_data: SpecMetaData::new(name, ValueType::String, optional), 
                 until: Separator::EndOfStream 
             }
         }
-
-        fn get_one_of_string(&self, name: SpecName, optional: bool, options: Vec<String>) ->  OneOfSpec where Self:Sized{
-            OneOfSpec{ 
-                spec_meta_data: SpecMetaData::new(name, ValueType::String, 
-                optional), until: Separator::EndOfStream,  
-                values: options 
-            }
-        }
-
-        fn get_exact_string(&self, name: SpecName, input: String, optional: bool) -> ExactStringSpec where Self:Sized {
-            ExactStringSpec::new(name, input, optional)
-        }
     }
 
-    pub(crate) trait KeySpecGenerator{
-        fn get_key_spec(&self, name: SpecName, optional: bool) -> Key{
-            let mut spec= DelimitedStringSpec::default();
-            spec.spec_meta_data = SpecMetaData::new(name.clone(), ValueType::String, optional);
-            Key(Box::new(spec), SpecMetaData::new(name , ValueType::None, optional))
-        }
+    pub trait KeySpecGenerator{        
     }
     
     impl <S> StringSpecGenerator for ProtoSpecBuilderData<S> where S:BuilderState{}
@@ -3731,7 +3651,7 @@ pub mod core {
     impl CustomSpecBuilder<BuildFromScratch> for ProtoSpecBuilderData<BuildFromScratch>{
     }
 
-    pub(crate) trait NumberSpecBuilder <IBS,OBS, OB> :NumberSpecGenerator + ProtoSpecBuilder<IBS>
+    pub trait NumberSpecBuilder <IBS,OBS, OB> :NumberSpecGenerator + ProtoSpecBuilder<IBS>
     where 
         Self: Sized + ProtoSpecBuilder<IBS> + 'static, 
         OB: ProtoSpecBuilder<OBS> + 'static,
@@ -3744,7 +3664,7 @@ pub mod core {
         OBS: BuilderState +  'static,
         ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, NumberU16Spec, IBS>> + 'static,            
         {        
-            let mut spec = self.get_u16_spec(name, optional);
+            let spec = self.get_u16_spec(name, optional);
             self.wrap_with_data(spec).into()
         }
 
@@ -3753,7 +3673,7 @@ pub mod core {
         OBS: BuilderState +  'static,
         ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, NumberU32Spec, IBS>> + 'static,            
         {
-            let mut spec = self.get_u32_spec(name, optional);
+            let spec = self.get_u32_spec(name, optional);
             self.wrap_with_data(spec).into()
         }
 
@@ -3762,7 +3682,7 @@ pub mod core {
         OBS: BuilderState +  'static,
         ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, NumberU64Spec, IBS>> + 'static,            
         {
-            let mut spec = self.get_u64_spec(name, optional);
+            let spec = self.get_u64_spec(name, optional);
             self.wrap_with_data(spec).into()
         }
 
@@ -3771,7 +3691,7 @@ pub mod core {
         OBS: BuilderState +  'static,
         ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, NumberI16Spec, IBS>> + 'static,            
         {
-            let mut spec = self.get_i16_spec(name, optional);
+            let spec = self.get_i16_spec(name, optional);
             self.wrap_with_data(spec).into() 
         }
 
@@ -3780,7 +3700,7 @@ pub mod core {
         OBS: BuilderState +  'static,
         ProtoSpecBuilderData<OBS>: From<BuilderWrapperWithData<Self, NumberI64Spec, IBS>> + 'static,            
         {
-            let mut spec = self.get_i64_spec(name, optional);
+            let spec = self.get_i64_spec(name, optional);
             self.wrap_with_data(spec).into()
         }
     }
@@ -3797,8 +3717,7 @@ pub mod core {
         ProtoSpecBuilderData<OBS>:ProtoSpecBuilder<BuildInlineValue> + From<BuilderWrapperWithData<Self, BuildInlineValue, IBS>>  + 'static,            
 
         {
-            self.wrap_with_data(BuildInlineValue{
-                key_name:key_name.to_name_string(),
+            self.wrap_with_data(BuildInlineValue{                
                 value_spec_metadata:SpecMetaData { name:  key_name, value_type: ValueType::None, optional: optional }
             }).into()
         }
@@ -3806,8 +3725,8 @@ pub mod core {
     
     impl From<BuilderWrapperWithData<ProtoSpecBuilderData<BuildFromScratch>, BuildInlineValue, BuildFromScratch>> for ProtoSpecBuilderData<BuildInlineValue>{
         fn from(value: BuilderWrapperWithData<ProtoSpecBuilderData<BuildFromScratch>, BuildInlineValue, BuildFromScratch>) -> Self {
-            let mut from_builder = value.0;
-            let from_state = from_builder.replace_current_state_with_default();
+            let from_builder = value.0;
+            //let from_state = from_builder.replace_current_state_with_default();
             let inline_value_data  = value.1;
             let mut to_builder = ProtoSpecBuilderData::default();
             to_builder.set_state(inline_value_data);
@@ -3902,7 +3821,7 @@ pub mod core {
         
         {            
             
-            let mut spec = self.get_string_spec(name, optional);
+            let spec = self.get_string_spec(name, optional);
             self.wrap_with_data(spec).into()            
         }
 
@@ -3911,7 +3830,7 @@ pub mod core {
         ProtoSpecBuilderData<BuildDelimiter<OneOfSpec, IBS>>:From<BuilderWrapperWithData<Self, OneOfSpec, IBS>> + 'static
         {
             //let name = name.unwrap_or("expect_one_of_string".to_string());
-            let mut one_of_spec = OneOfSpec::new(name, optional, options);
+            let one_of_spec = OneOfSpec::new(name, optional, options);
             self.wrap_with_data(one_of_spec).into()            
         }
 
@@ -3973,10 +3892,6 @@ pub mod core {
         }
     }
 
-    fn generate_key_name() -> String{
-        "key-1".to_string()
-    }
-
     impl KeySpecBuilder<BuildFromScratch> for ProtoSpecBuilderData<BuildFromScratch> {}
 
 
@@ -4013,55 +3928,13 @@ pub mod core {
     impl DelimitedStringSpecBuilder<BuildValue> for ProtoSpecBuilderData<BuildValue>     
     {       
     }
-    
 
-    fn test(){
-        //let t: ProtoSpecBuilderData<BuildKeyAvailable> = ProtoSpecBuilderData::new(BuildFromScratch::default()).expect_u16("rar".to_owned(), true);
-         let t= ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), SpecName::NoName, true);
-            let t = t.key_follows(SpecName::Name("keyname".to_string()), false);
-            let t = t.expect_string(SpecName::NoName, true)
-            .delimited_by_newline()
-            //.expect_exact_string("name".to_owned(), "input".to_owned(), false)
-            
-            ;
-        //let t = t.expect_string(SpecName::NoName,false);
-        //let t: ProtoSpecBuilderData<BuildKeyAvailable> = t.delimited_by_space();
-        //let t: ProtoSpecBuilderData<BuildKeyAvailable> = t.expect_exact_string(None, "test".to_string(), false);
-        
-        //t.expect_delimiter("dem".to_owned(), "delin".to_owned(), false);
-            /* let t1= t.expect_exact_string("test".to_owned(), "delimiter".to_owned(), true);
-            //let t1 = t1.expect_string("newstr".to_owned(), false);
-            ``
-            let  t1 = t1.expect_i16("name".to_owned(), false);
-            let t1 = t1.expect_i16("tet".to_owned(), true); */
-            
-            //let x= t.expect_exact_string("fasf".to_owned(), "test".to_owned(),  false);
-            //let x = t.expect_one_of_string(None,  false, vec!());
-            //let x = x.delimited_by_space(); 
-            let x = t.value_follows(SpecName::Name("test".to_string()), true)  ;
-            let x = x.expect_string(SpecName::NoName,  true);
-            let x = x.delimited_by("\r\n".to_owned());
-            let x = x.expect_exact_string(SpecName::NoName, "test".to_string(), true);
-
-
-
-            let x = x.repeat_many(SpecName::Name("repeat".to_string()), true, Separator::Delimiter("\r\n".to_owned()), ListSpec::new(SpecName::Name("test".to_owned()), ValueType::None, false));
-                
-                
-            
-            //x.expect_string("name".to_owned(), false);
-                
-                
-    }
-
-    
-
-    pub(crate) struct BuilderWrapperWithData<B,D, BS>(B, D , PhantomData<BS> ) 
+    pub struct BuilderWrapperWithData<B,D, BS>(B, D , PhantomData<BS> ) 
     where
         B:ProtoSpecBuilder<BS> + 'static, 
         BS:BuilderState + 'static;
     
-    struct BuilderWrapper<B,BS>(B , PhantomData<BS> ) where B:ProtoSpecBuilder<BS> + 'static, BS:BuilderState + 'static;
+    pub struct BuilderWrapper<B,BS>(B , PhantomData<BS> ) where B:ProtoSpecBuilder<BS> + 'static, BS:BuilderState + 'static;
 
      impl <D, IBS> From<BuilderWrapperWithData<ProtoSpecBuilderData<IBS>, D, IBS>> for ProtoSpecBuilderData<IBS> 
      where 
@@ -4233,10 +4106,9 @@ pub mod core {
         fn from(value: BuilderWrapperWithData<ProtoSpecBuilderData<BuildDelimiter<D, BuildInlineValue>>, String, BuildDelimiter<D, BuildInlineValue>>) -> Self {
             let mut from_builder = value.0;
             let mut from_state = from_builder.replace_current_state_with_default();
-            let mut result = ProtoSpecBuilderData::default();
-            let optional = from_state.parent_builder_state.value_spec_metadata.optional;
+            let mut result = ProtoSpecBuilderData::default();            
             from_state.delimiter_spec.set_delimiter(Separator::Delimiter(value.1));
-            let inline_key_value = InlineKeyWithValue(Box::new(from_state.delimiter_spec), from_state.parent_builder_state.key_name, from_state.parent_builder_state.value_spec_metadata);
+            let inline_key_value = InlineKeyWithValue(Box::new(from_state.delimiter_spec), from_state.parent_builder_state.value_spec_metadata);
             from_builder.add_spec(Box::new(inline_key_value));
             result.set_state(BuildFromScratch{});
             result.set_spec(from_builder.build());    
@@ -4248,11 +4120,10 @@ pub mod core {
         
         fn from(value: BuilderWrapperWithData<ProtoSpecBuilderData<BuildInlineValue>, ExactStringSpec, BuildInlineValue>) -> Self {
             let mut from_builder = value.0;
-            let mut from_state = from_builder.replace_current_state_with_default();
-            let mut result = ProtoSpecBuilderData::default();
-            let optional = from_state.value_spec_metadata.optional;
+            let from_state = from_builder.replace_current_state_with_default();
+            let mut result = ProtoSpecBuilderData::default();            
             let spec = value.1;
-            let inline_key_value = InlineKeyWithValue(Box::new(spec), from_state.key_name, from_state.value_spec_metadata);
+            let inline_key_value = InlineKeyWithValue(Box::new(spec), from_state.value_spec_metadata);
             from_builder.add_spec(Box::new(inline_key_value));
             result.set_state(BuildFromScratch{});
             result.set_spec(from_builder.build());    
@@ -4268,7 +4139,8 @@ pub mod core {
     {}
 
 
-    pub(crate) trait DelimiterGenerator{
+    #[allow(dead_code)]
+    pub trait DelimiterGenerator{
         fn get_newline(&self) -> Separator{
             Separator::Delimiter("\r\n".to_owned())
         }
@@ -4339,34 +4211,25 @@ mod utils;
 #[cfg(test)]
 mod tests {
     use crate::core::{
-        BuildFromScratch, DelimiterBuilder, InlineValueBuilder, ProtoSpecBuilderData, StringSpecBuilder, DelimitedStringSpecBuilder
+        BuildFromScratch, DelimitedStringSpecBuilder, DelimiterBuilder, ProtoSpecBuilderData
     };
 
     
-
+    #[allow(unused)]
     fn test_string_placeholder(){
-        let mut spec_builder = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), crate::core::SpecName::NoName, true);
+        let spec_builder = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), crate::core::SpecName::NoName, true);
         let spec = spec_builder.expect_string(crate::core::SpecName::NoName, false);
-        let spec = spec.delimited_by_space();
+        let _spec = spec.delimited_by_space();
                        
-    }
-
-    #[test]
-    fn test_protocol_spec_builder() {
-        let mut spec_builder = ProtoSpecBuilderData::new_with_state(BuildFromScratch::default(), crate::core::SpecName::NoName, true);
-
-
-        let spec_builder = spec_builder.inline_value_follows(crate::core::SpecName::Name("key-1".to_owned()), false);
     }
 }
 
 #[cfg(test)]
-mod test_utils {
-    use std::collections::HashMap;
+mod test_utils {    
 
     use tracing::warn;
 
-    use crate::{core::{InfoProvider, Mapper, RequestInfo, Value}, mapping_extractor::DefaultMapper};
+    use crate::{core::{InfoProvider, Mapper, RequestInfo}, mapping_extractor::DefaultMapper};
 
     pub fn assert_result_has_string(
         result: Result<Option<Vec<u8>>, crate::core::ParserError>,
@@ -4388,8 +4251,10 @@ mod test_utils {
 
     //#[derive(Default)]
     #[derive(Debug)]
+    #[allow(unused)]
     pub struct TestRequestInfo(pub Box<dyn Mapper>, Vec<String>);
 
+    #[allow(unused)]
     impl TestRequestInfo {
         pub fn new() -> Self {
             TestRequestInfo( Box::new(DefaultMapper::new()), Vec::new())

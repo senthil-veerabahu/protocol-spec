@@ -99,7 +99,7 @@ impl Marker {
 
 
 #[pin_project]
-pub(super) struct ProtocolBuffReader<R>
+pub(crate) struct ProtocolBuffReader<R>
 where
     R: AsyncBufRead + Send + Sync + Unpin,
 {
@@ -250,7 +250,7 @@ where
 impl <R>ProtocolBuffReader<R>
     where R: AsyncBufRead + Send + Sync + Unpin,
 {
-    fn mark(&mut self) {
+    /* fn mark(&mut self) {
         self.marked_pos = self.pos;
         self.marked = true;
     }
@@ -262,7 +262,7 @@ impl <R>ProtocolBuffReader<R>
 
     fn unmark(&mut self) {
         self.marked = false;
-    }
+    } */
 
     fn fill_buffer(self: &mut Self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         //let mut pinned_self = self.project();
@@ -323,11 +323,14 @@ impl <R>ProtocolBuffReader<R>
         }
     }
 
+    #[allow(unused)]
     fn increment_line_index(&mut self) {
         self.line_index += 1;
         self.char_index_in_line = 0;
         self.char_index += 1;
     }
+    
+    #[allow(unused)]
     fn increment_char_index(&mut self) {        
         self.char_index_in_line += 1;
         self.char_index += 1;
@@ -337,6 +340,7 @@ impl <R>ProtocolBuffReader<R>
         self.char_index_in_line + 1
     }
 
+    #[allow(unused)]
     fn increment_char_index_by(&mut self, count:usize) {        
         self.char_index_in_line += count;
         self.char_index += count;
@@ -385,6 +389,7 @@ impl ReadBytesSize {
         }
     }
 
+    #[allow(unused)]
     fn is_full(&self) -> bool {
         matches!(self, ReadBytesSize::Full)
     }
@@ -793,6 +798,7 @@ where
     }
 }
 
+#[allow(unused)]
 fn is_eof_error(parse_error: &ParserError) -> bool {
     match parse_error {
         ParserError::IOError { error } => {
@@ -851,7 +857,7 @@ mod tests {
     use tokio_stream::StreamExt;
     use tracing::{debug, warn};
 
-    use crate::core::{new_spec_builder, CompositeBuilder, DefaultSerializer, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, Mapper, ProtoSpecBuilder, ProtoSpecBuilderData, RepeatBuilder, RequestSerializer, StringSpecBuilder, ValueBuilder};
+    use crate::core::{new_spec_builder, CompositeBuilder, DefaultSerializer, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, Mapper, ProtoSpecBuilder, RepeatBuilder, RequestSerializer, StringSpecBuilder, ValueBuilder};
     use crate::core::{protocol_reader::ProtoStream, SpecName};
     
     use crate::mapping_extractor::{DefaultMapper, SpecTraverse};
@@ -956,38 +962,7 @@ mod tests {
         assert_result_has_string(result, "\n".to_string());
     }
 
-    #[tokio::test]
-    async fn test_proto_reader_mark_reset() {
-        let data = b"Hello World\n";
-        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
-        protocol_reader.mark();
-        protocol_reader
-            .read_placeholder_as_string(
-                
-                "Hello".to_string(),
-            )
-            .await
-            .unwrap();
-        protocol_reader.reset();
-
-        let value = protocol_reader
-            .read_placeholder_as_string(
-                "Hello".to_string(),
-            )
-            .await
-            .unwrap();
-        protocol_reader.reset();
-        
-        match value {
-            Some(value) => {
-                let str_value = String::from_utf8(value).unwrap();    
-                assert!(str_value == "Hello".to_string());
-            }
-            _ => {
-                assert!(false);
-            }
-        }
-    }
+    
 
     #[tokio::test]
     async fn test_proto_reader_stream_conversion() {
@@ -1053,7 +1028,6 @@ mod tests {
     async fn test_stream_to_proto_reader_conversion() {
         let data = b"Hello World\n";
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
-        protocol_reader.mark();
         protocol_reader
             .read_placeholder_as_string(                
                 "Hello".to_string(),
@@ -1117,7 +1091,7 @@ mod tests {
             .delimited_by_newline()
             .build();
 
-        let mut header_placeholder_builder = new_spec_builder(SpecName::Name("header".to_string()));
+        let header_placeholder_builder = new_spec_builder(SpecName::Name("header".to_string()));
         let header_place_holder = header_placeholder_builder
             .key_follows(SpecName::Name("header_name".to_owned()), true)
             .expect_string(SpecName::NoName, false)
@@ -1148,7 +1122,8 @@ mod tests {
         let mut request_info = TestRequestInfo::new();
 
         let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
-        spec.traverse(&mut mapper );
+        let result = spec.traverse(&mut mapper );
+        assert!(result.is_ok());
         debug!("{:?}", &mut mapper);
         request_info.0 = mapper;
 
@@ -1202,7 +1177,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_unexpected_token_error() {
         let data = b"Hello World\n";
-        let mut spec = new_spec_builder(SpecName::NoName);
+        let spec = new_spec_builder(SpecName::NoName);
         let root = spec.inline_value_follows(SpecName::NoName, false)
             .expect_string(SpecName::Name("first_word".to_string()), false)
             .delimited_by_space()
@@ -1210,17 +1185,17 @@ mod tests {
             .expect_exact_string(SpecName::Name("second_word".to_string()), "World".to_string(), false)
             .expect_space()
             .build();
-        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+        let protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
         let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
-        root.traverse(&mut mapper );
+        assert!(root.traverse(&mut mapper).is_ok());
         request_info.0 = mapper;
         //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
         let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &root).await;
         
 
-        
+        #[allow(unused)]
         match result{
             Ok(_) => {
                 assert!(false, "expected unexpected token error, but got success");
@@ -1245,7 +1220,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_token_eof_error() {
         let data = b"Hello World\r\n";
-        let mut spec = new_spec_builder(SpecName::NoName);
+        let spec = new_spec_builder(SpecName::NoName);
         let root = spec
             .inline_value_follows(SpecName::NoName, false)
             .expect_string(SpecName::Name("first_word".to_string()), false)
@@ -1255,11 +1230,11 @@ mod tests {
             .expect_newline()
             .expect_newline()
             .build();
-        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+        let protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
         let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
-        root.traverse(&mut mapper );
+        assert!(root.traverse(&mut mapper ).is_ok());
         request_info.0 = mapper;
         //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
         let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &root).await;
@@ -1293,7 +1268,7 @@ mod tests {
     #[tokio::test]
     async fn test_proto_optional_test() {
         let data = b"Hello \r\n";
-        let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
+        let protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
         let spec = new_spec_builder(SpecName::NoName)
         .inline_value_follows(SpecName::Name("first_word".to_string()), false)
         
@@ -1307,7 +1282,7 @@ mod tests {
 
         let mut request_info = TestRequestInfo::new();
         let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
-        spec.traverse(&mut mapper );
+        assert!(spec.traverse(&mut mapper ).is_ok());
         request_info.0 = mapper;
         //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
         let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &spec).await;
@@ -1334,7 +1309,4 @@ mod tests {
         
         
     }
-
-
-    
 }
