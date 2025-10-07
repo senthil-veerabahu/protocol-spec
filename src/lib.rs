@@ -1,4 +1,141 @@
-
+//! # protocol-spec 
+//! This crate helps developers create protocol parsers by using a declarative, DSL-style approach.
+//! For e.g, developer can create custom protocol for imaginary example of sending `hello world`` to server upon connection 
+//! using the below code
+//! ```
+//! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
+//! let spec = spec_builder
+//! .inline_value_follows(SpecName::NoName, true)
+//! .expect_string(SpecName::Name("greeting".to_string()), false).delimited_by_space()
+//! .inline_value_follows(SpecName::NoName, true)
+//! .expect_string(SpecName::Name("who".to_string()), false).delimited_by_space().build();
+//! ```
+//! 
+//! Text protocol can be thought of as list of data holders. Data here refers to `hello` and `world` separated by space.
+//! `hello` represents the greeting type and `world` represents the receiver of the greeting.
+//! Data can be thought of as key and value. The value represents the data and key identifies it with a name.
+//! There are two ways to represent data in the parser 1)InlineValue 2)KeyValue.
+//! ### InlineKeyValue 
+//! Inline Value specifies that the key is the SpecName and value is available in the protocol payload
+//! In the above example, Key is `greeting`(from spec name) and value is `hello`
+//! 
+//! ```
+//! .inline_value_follows(SpecName::NoName, true)
+//! .expect_string(SpecName::Name("greeting".to_string()), false).delimited_by_space()
+//! ```
+//! delimited_by_space specifies that the string `hello` ends with space. 
+//! It is also possible to specify data in other data types e.g u32.
+//! In that case, the spec becomes as below. The boolean in inline_value_follows and expect_u32 specifies whether the data is optional.
+//! 
+//! .inline_value_follows(SpecName::NoName, true)
+//! .expect_u32(SpecName::Name("somedata"), false)
+//! 
+//! The protocol can be thought of tree of individual data items and each individual data items can be represented using the spec builder.
+//! For e.g in http request,
+//! ```
+//! PUT /vote HTTP/1.1
+//! Content-Type: application/json
+//! Content-Length: 21
+//! 
+//! {option:1, id:"a1234"}
+//! ```
+//! Http request can be thought of request line followed by one or more Key value pairs followed by new line and payload data.
+//! Each data here is represented as Spec. Spec contains metadata including a name(SpecName) and flag representing optionality of the spec
+//! Each Spec can be serialized and deserialized.
+//! 
+//! In http request example, PUT can be represented as InlineKeyWithValue spec which contains DelimitedString,
+//! Each header item can be represented as KeyValueSpec and Payload can be represented as InlineKeyWithValue spec containing bytes
+//! 
+//! Each header can be represented as below
+//! 
+//! ```
+//! let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));    
+//! let header_place_holder = header_placeholder_builder
+//! .key_follows(Name("header_name".to_string()), true)
+//! .expect_string( NoName, false)
+//! .delimited_by(": ".to_string())
+//! .value_follows(Name("header_value".to_owned()), false)
+//! .expect_string(NoName, false)
+//! .delimited_by_newline()
+//! .build();
+//! ```
+//! 
+//! ## KeyValueSpec
+//! To specify both key and value from the protocol itself, use key_follows and value_follows function as in the above example.
+//! Key is expected to be a string and value can be number, string or bytes
+//! 
+//! ## RepeatMany spec
+//! 
+//! http headers can be repeated many times and it ends with a extra newline character. This can be represented as below using repeat_many function
+//! 
+//! ```
+//! let spec_builder = spec_builder.repeat_many(Name("headers".to_owned()), true, 
+//! Separator::Delimiter("\r\n".to_owned()),header_place_holder)
+//! ```
+//! 
+//! Entire http request can be represented as spec
+//! 
+//! ```
+//! pub fn build_http_request_protocol() -> ListSpec {
+//!    
+//!    let space = " ";
+//!    let newline = "\r\n";
+//!    let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();        
+//!    let request_line_placeholder= ProtoSpecBuilderData::<BuildFromScratch>::new_with(Transient("request_line".to_string()), false);
+//!    //let request_line_placeholder = ;
+//!
+//!        let request_line_placeholder = 
+//!        request_line_placeholder.inline_value_follows(Name("request_method".to_owned()), false)
+//!        .expect_one_of_string(
+//!            NoName,
+//!            false,
+//!            vec![
+//!                "GET".to_string(),
+//!                "POST".to_string(),
+//!                "DELETE".to_string(),
+//!                "PUT".to_string(),
+//!                "OPTIONS".to_string(),
+//!            ],
+//!        )
+//!        .delimited_by_space()
+//!
+//!        .inline_value_follows(Name("request_uri".to_owned()), false)
+//!        .expect_string(
+//!            NoName,
+//!            false,
+//!            
+//!        )
+//!        .delimited_by_space()
+//!
+//!        .inline_value_follows(Name("protocol_version".to_owned()), false)
+//!        .expect_string(NoName,false)
+//!        .delimited_by_newline()
+//!        .build();
+//!
+//!    let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));
+//!    //let mut header_placeholder_builder = header_placeholder_builder.delimited_by_newline();
+//!
+//!    let header_place_holder = header_placeholder_builder
+//!        .key_follows(Name("header_name".to_string()), true)
+//!        .expect_string( NoName, false)
+//!        .delimited_by(": ".to_string())
+//!        
+//!        .value_follows(Name("header_value".to_owned()), false)
+//!        .expect_string(NoName, false)
+//!        .delimited_by_newline()
+//!        .build();
+//!
+//!    let spec_builder = spec_builder.expect_composite(request_line_placeholder)
+//!    .repeat_many(Name("headers".to_owned()), true, Separator::Delimiter("\r\n".to_owned()),header_place_holder)
+//!    
+//!    .use_spec(Box::new(BodySpec::new(Name("request_body".to_owned()), true)));
+//!
+//!    spec_builder.build()
+//!}
+//! 
+//! 
+ 
+/// common module exposes all the public items of the spec required to build custom protocol
 pub mod common{
 
     pub use crate::mapping_extractor::{SpecTraverse, traverse_spec, ToSpecType, DefaultMapper};
@@ -13,24 +150,14 @@ pub mod common{
         InlineValueBuilder, KeySpecBuilder, RepeatBuilder, DelimitedStringSpecBuilder, 
         NumberSpecBuilder, DelimiterBuilder, ProtoSpecBuilder, ValueBuilder, CompositeBuilder, CustomSpecBuilder, 
         new_mandatory_spec_builder, Separator,
-        SpecName, ValueType,  ValueExtractor, SpecSerialize, SpecDeserialize};
-
-    
-
-
+        SpecName, ValueType,  ValueExtractor, SpecSerialize, SpecDeserialize };
 }
 
-//#![debugger_visualizer(natvis_file = "./Foo.natvis")]
+/// mapping_extractor specifies how to traverse tree of spec to build metadata required for parsing and querying
 mod mapping_extractor{
     use std::collections::HashMap;
-
-
-
     use tracing::debug;
-
     use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, ParserError, ProtocolSpec, RepeatManySpec, RepeaterContext, SimpleValueSpec, Spec, SpecMapper, SpecType, Value, ValueSpec};
-
-     
 
     pub trait SpecTraverse{
         fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError>;
@@ -127,24 +254,9 @@ mod mapping_extractor{
     impl ToSpecType for ValueSpec {
     }
 
-    /* impl ToSpecType for OneOfSpec {
-    } */
-
     impl ToSpecType for KeyValueSpec {
     }
 
-    /* impl ToSpecType for NBytesSpec {
-    } */
-
-    /* impl ToSpecType for ExactStringSpec {
-    }
-
-    impl ToSpecType for AllBytesSpec {
-    }
- */
-    /* impl ToSpecType for DelimitedStringSpec {
-    }
- */
     impl ToSpecType for InlineKeyWithValue {
     }
 
@@ -167,35 +279,11 @@ mod mapping_extractor{
         }
     }
 
-    /* impl  SpecTraverse for NBytesSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper)
-        }
-    } */
-
-    /* impl  SpecTraverse for AllBytesSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper)
-        }
-    } */
-
     impl  SpecTraverse for ValueSpec{
         fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
-
-    /* impl  SpecTraverse for OneOfSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper)
-        }
-    }
-
-    impl  SpecTraverse for ExactStringSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper)
-        }
-    } */
 
     impl  SpecTraverse for KeyValueSpec{
         fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
@@ -229,19 +317,9 @@ mod mapping_extractor{
         }
     }
 
-    /* impl SpecTraverse for DelimitedStringSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) {
-            traverse_spec(self, mapper);
-        }
-    } */
-
     impl SpecMapper for InlineKeyWithValue{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>)->Result<(), ParserError>  {
             self.0.traverse(mapper)
-            
-            /* let key_name = &self.1;
-            let path = mapper.get_mapper_context_mut().get_current_spec_path_template();
-            mapper.add_mapping_template(key_name.to_owned(), path); */
         }
     }
    
@@ -261,12 +339,6 @@ mod mapping_extractor{
                 mapper.add_mapping_template(key_name, path);
             }
             Ok(())
-            /* if let SpecName::Name(name) = key_name{
-                //mapper.get_mapper_context_mut().start_spec_type(SpecType::Simple(SpecName::Name(name.to_owned())));
-                let path = mapper.get_mapper_context_mut().get_current_spec_path_template();
-                mapper.add_mapping_template(key_name.into(), path);
-                //mapper.get_mapper_context_mut().end_current_spec();
-            } */
         }
     }
 
@@ -291,9 +363,6 @@ mod mapping_extractor{
                 }
                 (_,_) =>{}
             }
-            //mapper.get_mapper_context_mut().end_current_spec();
-
-            //mapper.get_mapper_context_mut().start_spec(&self.value);
 
             let ( value_name, value_spec_path,) = extract_name_and_spec_path(path_finder, mapper,&self.value, &self.value.0)?;
             match ( &value_name,  &value_spec_path){                
@@ -302,7 +371,6 @@ mod mapping_extractor{
                 }
                 (_,_) =>{}
             }
-            //mapper.get_mapper_context_mut().end_current_spec();
 
             match (&key_spec_path, &value_spec_path){        
             (Some(key_path), Some(value_path)) => {
@@ -333,10 +401,10 @@ mod mapping_extractor{
             
         }
     }
-
 }
 
 
+/// Core module contains the basic framework for building protocol specification.
 pub mod core {
     use crate::core::protocol_reader::ReadBytesSize;
     use crate::core::protocol_writer::PlaceHolderWrite;
@@ -363,6 +431,7 @@ pub mod core {
         net::{TcpListener, TcpStream},
     };
 
+    //Currently not used. But later when we support udp and binary protocols
 
     #[allow(dead_code)]
     pub trait ProtocolInfo {
@@ -372,46 +441,54 @@ pub mod core {
         fn get_format() -> ProtocolFormat;
     }
 
+    /// Enum for all common error generated from the framework
     #[allow(unused)]
     #[derive(Debug)]
     pub enum ParserError {
-        InvalidPlaceHolderTypeFound {
-            line_index: usize,
-            char_index: usize,
-            message: String,
-        },
+        /// Particular token expected is not found
         TokenExpected {
             line_index: usize,
             char_index: usize,
             message: String,
         },
-        InvalidToken {
-            line_index: usize,
-            char_index: usize,
-            message: String,
-        },
-        UnexpectedKeyOrValue {          
-            message: String,
-        },
+
+        /// Error to denote that key is missing in KeyValueSpec
         MissingKey(String),
+
+        /// Data is missing when try to serialize spec
         MissingData(String),
+
+        /// Value is missing when try to deserialize KeyValueSpec
         MissingValue(String),
+
+        /// denotes error from serde crate
         SerdeError(String),
+
+        /// denotes error when parsing utf8 string
         Utf8Error(Utf8Error),
+
+        /// denotes end of stream error
         EndOfStream,
+
+        /// No  constituent of a composite spec can be serialized/deserialized
         NoValidListConstituents(String),
+
+        /// Invalid marker        
         InvalidMarker {
             line_index: usize,
             char_index: usize,
             message: String,
         },
 
+        /// wraps std::io::error
         IOError {
             error: std::io::Error,
         },
     }
 
     impl ParserError{
+
+        /// check if the error is EndOfStream
         fn is_eof(&self) -> bool{
             match self{
                 ParserError::EndOfStream => true,
@@ -420,7 +497,9 @@ pub mod core {
         }
     }
 
-    impl<'l> Display for ParserError {
+
+    /// Implements Display for each item of ParserError enum
+    impl Display for ParserError {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
                 ParserError::TokenExpected {
@@ -434,32 +513,10 @@ pub mod core {
                                                 line_pos, position, message
                                             )
                                         }
-                ParserError::InvalidToken {
-                                            line_index: line_pos,
-                                            char_index: char_pos,
-                                            message,
-                                        } => {
-                                            write!(
-                                                f,
-                                                "Invalid token at line {}  position {} {}",
-                                                line_pos, char_pos, message
-                                            )
-                                        }
                 ParserError::IOError { error } => {
                                             write!(f, "IO Error {}", error)
                                         }
-                ParserError::MissingKey(msg) => write!(f, "{}", msg),
-                ParserError::InvalidPlaceHolderTypeFound {
-                                            line_index: line_pos,
-                                            char_index: char_pos,
-                                            message,
-                                        } => {
-                                            write!(
-                                                f,
-                                                "Invalid placeholder type found at line {}  position {} {}",
-                                                line_pos, char_pos, message
-                                            )
-                                        }
+                ParserError::MissingKey(msg) => write!(f, "{}", msg),                
                 ParserError::MissingData(key) => {
                                             write!(f, "Expected data for key {} but found none whle writing to writer", key)
                                         }
@@ -488,31 +545,56 @@ pub mod core {
                 ParserError::InvalidMarker { line_index, char_index, message } => write!(
                     f,
                     "Invalid Marker provided during mark/reset operation at line {} char_pos {}: {}", line_index, char_index, message                       
-                ),
-                Self::UnexpectedKeyOrValue { message } => {
-                    write!(f, "Unexpected key or value found: {}", message)
-                }
+                ),                
             }
         }
     }
 
     #[allow(unused)]
+
+    ///Extractor to retrieve underlying data from Value
     pub trait ValueExtractor<'a> {
+
+        /// Gets underlying string value wrapped in Result
         fn get_string_value_unchecked(&self) -> Result<String, ParserError>;
+
+        /// Gets underlying i64 value  wrapped in Result
         fn get_signed_num_64_value_unchecked(&self) -> Result<i64, ParserError>;
+
+        /// Gets underlying u64 value  wrapped in Result
         fn get_unsigned_num_64_value_unchecked(&self) -> Result<u64, ParserError>;
+
+        /// Gets underlying u32 value  wrapped in Result
         fn get_unsigned_num_32_value_unchecked(&self) -> Result<u32, ParserError>;
+
+        /// Gets underlying i16 value  wrapped in Result
         fn get_signed_num_16_value_unchecked(&self) -> Result<i16, ParserError>;
+
+        /// Gets underlying u16 value  wrapped in Result
         fn get_unsigned_num_16_value_unchecked(&self) -> Result<u16, ParserError>;
+
+        /// Gets underlying u8 value  wrapped in Result
         fn get_u8_vec_unchecked(&self) -> Result<&Vec<u8>, ParserError>;
+
+        /// Gets underlying string value as Option
         fn get_string_value(&self) -> Option<String>;
+
+        /// Gets underlying i64 value as Option
         fn get_signed_num_64_value(&self) -> Option<i64>;
+
+        /// Gets underlying u64 value as Option
         fn get_unsigned_num_64_value(&self) -> Option<u64>;
+
+        /// Gets underlying u32 value as Option
         fn get_unsigned_num_32_value(&self) -> Option<u32>;
 
+        /// Gets underlying i16 value as Option
         fn get_signed_num_16_value(&self) -> Option<i16>;
+
+        /// Gets underlying u16 value as Option
         fn get_unsigned_num_16_value(&self) -> Option<u16>;
 
+        /// Gets underlying data Vec<u8> Option
         fn get_u8_vec(&self) -> Option<&Vec<u8>>;
     }
 
@@ -643,6 +725,8 @@ pub mod core {
         }
     }
     
+
+    /// Value wraps underlying data. It is wrapper for string, number and bytes 
     #[allow(unused)]
     #[derive(Debug, Clone)]
     pub enum Value {
@@ -653,12 +737,11 @@ pub mod core {
         SignedNumber16(i16),
         UnSignedNumber16(u16),
         U8Vec(Vec<u8>),
-        Map(String, HashMap<String, Value>),
-        Composite(Vec<Value>),
         
         None,
     }
 
+    /// Value Type enum list various types used to represent underlying protocol data 
     #[derive(PartialEq)]
     pub enum ValueType {
         String,
@@ -674,6 +757,8 @@ pub mod core {
     }
 
     impl ValueType{
+
+        /// Converts slice into Value based on value type
         pub fn parse(value_type: &ValueType, value: &[u8]) -> Value {                
 
             match value_type {
@@ -707,41 +792,39 @@ pub mod core {
         }
     }
 
+    /// Serializes `Value` to  Writer
     #[allow(unused)]
-        async fn write<W: AsyncWrite + Unpin>(value: &Value, mut writer: W) -> Result<(), ParserError> {
-            match value {
-                Value::String(s) => {
-                                writer.write(s.as_bytes()).await?;
-                            }
-                Value::SignedNumber64(num) => {
-                                writer.write_i64(*num).await?;
-                            }
-                Value::UnSignedNumber64(num) => {
-                                writer.write_u64(*num).await?;
-                            }
-                Value::UnSignedNumber32(num) => {
-                    writer.write_u32(*num).await?;
-                }
-                Value::U8Vec(data) => {
-                                writer.write_all(&data[..]).await?;
-                            }
-                Value::SignedNumber16(num) => {
-                    writer.write_i16(*num).await?;
-                }
-                Value::UnSignedNumber16(num) => {
-                    writer.write_u16(*num).await?;
-                },
-
-                
-
-                _ => todo!(),
+    async fn write<W: AsyncWrite + Unpin>(value: &Value, mut writer: W) -> Result<(), ParserError> {
+        match value {
+            Value::String(s) => {
+                            writer.write(s.as_bytes()).await?;
+                        }
+            Value::SignedNumber64(num) => {
+                            writer.write_i64(*num).await?;
+                        }
+            Value::UnSignedNumber64(num) => {
+                            writer.write_u64(*num).await?;
+                        }
+            Value::UnSignedNumber32(num) => {
+                writer.write_u32(*num).await?;
             }
-            Ok(())
+            Value::U8Vec(data) => {
+                            writer.write_all(&data[..]).await?;
+                        }
+            Value::SignedNumber16(num) => {
+                writer.write_i16(*num).await?;
+            }
+            Value::UnSignedNumber16(num) => {
+                writer.write_u16(*num).await?;
+            },
+            _ => todo!(),
         }
-    
+        Ok(())
+    }
 
     impl Value {
 
+        /// Serializes Value to a AsyncWrite
         #[allow(unused)]
         async fn write<W: AsyncWrite + Unpin>(& self, mut writer: W) -> Result<(), ParserError> {
             match self {
@@ -767,27 +850,27 @@ pub mod core {
                                 writer.write_u16(*num).await?;
                             },
                 Value::None => todo!(),
-                Value::Map(_, hash_map) => todo!(),
-                Value::Composite(values) => todo!(),
             }
             Ok(())
         }
     }
 
 
-
+    /// The trait provides methods to get deserialized protocol data.    
     pub trait InfoProvider:  Send + Sync{
-        #[allow(unused)]
+
+        /// Gets the data using key as lookup        
         fn get_info(&self, key: &String) -> Option<&Value>{
             self.get_mapper().get_value_by_key(key)
         }
 
-        #[allow(unused)]
+        /// Gets the data using spec path as lookup        
         fn get_info_by_spec_path(&self, spec_path: &String) -> Option<&Value>{
             self.get_mapper().get_spec_data().get(spec_path)
         }
 
-        #[allow(unused)]
+        /// Gets the data using key and spec name. This is used when querying Keyvalue pair that is generated using RepeatMany Spec
+        /// For Http headers example, key could be Content-Type and spec_name is `header_name`(header_name is specified in Spec builder)
         fn get_key_value_info_by_spec_name(&self, key: String, spec_name: &String) -> Option<&Value>{
             let path = self.get_mapper().get_mapping_data_template().get(spec_name);
             if let Some(path) = path{
@@ -810,11 +893,17 @@ pub mod core {
         #[allow(unused)]
         fn get_keys_by_group_name(&self, name: String) -> Option<Vec<& String>>; */
 
+        /// Adds simple key and a value
         fn add_info(&mut self, key: String, value: Value) -> Result<(), ParserError>{
             self.get_mapper_mut().add_simple_data(key, value)
         }
 
-        #[allow(unused)]
+        /// Adds info by using key, key spec name, value and value spec_name
+        /// For http headers example 
+        /// key -> Content-Type,
+        /// value -> application/json,
+        /// key_spec_name -> header_name
+        /// value_spec_name -> header_value
         fn add_info_by_spec_path(&mut self, key: String, key_spec_name: String, value: Value , value_spec_name: String) {
             self.get_mapper_mut().add_to_key_value_list(key, value, key_spec_name, value_spec_name);
         }
@@ -823,17 +912,19 @@ pub mod core {
 
         //fn has_all_data(&self) -> bool;
 
+        /// Gets mutable mapper reference
         fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper>;
 
+        /// Gets shared mutable mapper reference
         fn get_mapper(&self) ->&Box<dyn Mapper>;
 
-        
-        
+        /// Gets mapper context        
         fn get_mapper_context(&mut self) ->&mut MapperContext{
             self.get_mapper_mut().get_mapper_context_mut()
         }
     }
 
+    /// Represents Contextual data of RepeatManySpec e.g holds current count
     #[derive(Clone, Debug)]
     pub struct RepeaterContext{
         count: u32
@@ -857,18 +948,18 @@ pub mod core {
 
 
 
+    /// trait to represent protocol request information
     pub trait RequestInfo: InfoProvider {
-
-        
-        
     }
 
+    /// trait to represent protocol response information
     pub trait ResponseInfo: InfoProvider {
         fn add_defaults(&mut self) -> Result<(), ParserError>;
 
     }
 
-
+    /// RequestFactory contains methods to generate Request related objects e.g RequestInfo, RequestSerializer,
+    /// RequestDeserializer, ReqiestErrorHandler, Request Spec
     #[allow(unused)]
     pub trait RequestFactory<REQI, REQSER, REQH, REQERRH, RESI> : Send + Sync
     where
@@ -878,25 +969,24 @@ pub mod core {
         REQERRH: RequestErrorHandler<REQI, RESI>,
         RESI: ResponseInfo,
     {
+        ///Gets the request specification
         fn get_request_spec(&self) -> &Box<dyn ProtocolSpec>;
 
+        ///Creates request info object
+        fn create_request_info(&self) -> REQI;        
         
-
-
-        fn create_request_info(&self) -> REQI;
-
-        /* fn get_default_mapper_mut(&mut self) -> &mut Box<dyn Mapper>;        
-
-        fn set_default_mapper(&mut self, mapper:Box<dyn Mapper>);        
-
-        fn get_default_mapper(&self) -> & Box<dyn Mapper>;         */
-        
+        ///Creates request serializer
         fn create_request_serializer(&self) -> REQSER;
+
+        ///Creates  request handler
         fn create_request_handler(&self) -> REQH;
+
+        ///Creates request error handler
         fn create_error_request_handler(&self) -> REQERRH;
     }
 
-    #[allow(unused)]
+    /// ResponseFactory contains methods to generate Response related objects e.g ResponseInfo, ResponseSerializer,
+    /// ResponseDeserializer, ResponseErrorHandler, Response Spec
     pub trait ResponseFactory<RESI, RESS, RESH, RESERRH>: Send + Sync
     where
         RESI: ResponseInfo,
@@ -904,19 +994,33 @@ pub mod core {
         RESH: ResponseHandler<RESI>,
         RESERRH: ResponseErrorHandler<RESI>,
     {
+        ///Gets response spec created using the spec builder
         fn get_response_spec(&self) -> &Box<dyn ProtocolSpec>;
+
+        /// Creates ResponseInfo object
         fn create_response_info(&self) -> Result<RESI, ParserError>;
+
+        /// Creates Response Serializer object
         fn create_response_serializer(&self) -> RESS;
+
+        /// Creates Response handler object
         fn create_response_handler(&self) -> RESH;
+
+        /// Creates Response error handler object
         fn create_error_response_handler(&self) -> RESERRH;
     }
 
+    /// Request Handler trait
     #[async_trait]
     pub trait RequestHandler<REQI, RESI> : Send + Sync
     where
         REQI: RequestInfo,
         RESI: ResponseInfo,
     {
+        /// handles the request
+        /// * `request` - RequestInfo object containing deserialized request data
+        /// * `response` - Response infomation to be popuated by this method
+        /// * returns - Result of ResponseInfo
         async fn handle_request(&self, request: &REQI, response: &mut RESI) -> Result<RESI, ParserError>;
     }
 
@@ -924,14 +1028,19 @@ pub mod core {
     where
         RESI: ResponseInfo,
     {
-        #[allow(unused)]
+        /// handles the response
+        /// * `response` - ResponseInfo object containing deserialized response data. This is mainly used by protocol client to handle the response generated by the server                        
         fn handle_response(&self, response: &RESI) -> Result<(), ParserError>;
     }
 
+    /// Response Error Handler trait
     pub trait ResponseErrorHandler<RESI>  : Send + Sync
     where
         RESI: ResponseInfo,
     {
+        /// handles the error response
+        /// * `response` - ResponseInfo object containing deserialized response data. This is mainly used by protocol client to handle the response generated by the server                        
+        /// * `error` - Error data
         #[allow(unused)]
         fn handle_response_error<E>(
             &self,
@@ -941,20 +1050,32 @@ pub mod core {
     }
 
     
-
+    /// handles the error request
+    /// * `response` - RequestInfo object containing deserialized request data. 
+    /// * `error` - Error data
     pub trait RequestErrorHandler<REQI, RESI>: Send + Sync
     where
         REQI: RequestInfo,
         RESI: ResponseInfo,
     {
+        /// handles the error request
+        /// * `request` - RequestInfo object containing deserialized request data. 
+        /// * `error` - Error data
         #[allow(unused)]
         fn handle_request_error<E>(&self, request: &REQI, error: E) -> Result<RESI, ParserError>;
     }
 
+
+    /// Serializer for request
     #[async_trait]
     pub trait RequestSerializer<
         REQI: RequestInfo> : Send + Sync
     {
+
+        /// Serializes request to writer
+        /// * req - Request Info
+        /// * writer - AsyncWrite implementation
+        /// * spec - Request Spec
         #[allow(unused)]
         async fn serialize_to<W>(
             &self,
@@ -964,6 +1085,10 @@ pub mod core {
         ) -> Result<(), ParserError>
         where W: AsyncWrite + Unpin + Send + Sync;
 
+        /// DeSerializes request from reader stream
+        /// * req - Request Info
+        /// * reader - AsyncRead implementation
+        /// * spec - Request Spec
         async fn deserialize_from<'a, B>(
             &self,
             request_info: &'a mut REQI,
@@ -973,19 +1098,28 @@ pub mod core {
     }
 
 
+    /// Serializer for Response
     #[async_trait]
     pub trait ResponseSerializer<RSI>: Send + Sync 
     where RSI: ResponseInfo ,
         
     {
+        /// Serializes response info to writer
+        /// * res - Response Info
+        /// * writer - AsyncWrite implementation
+        /// * spec - Response Spec
         async fn serialize_to<W>(
             &self,
-            req: RSI,
+            res: RSI,
             writer: W,
             spec: &Box<dyn ProtocolSpec>,
         ) -> Result<(), ParserError>
         where W: AsyncWrite + Unpin + Send + Sync;
 
+        /// DeSerializes response from reader stream
+        /// * response_info - Response Info
+        /// * reader - AsyncRead implementation
+        /// * spec - Response Spec
         #[allow(unused)]
         async fn deserialize_from<'a, R>(&self,  
             response_info: &'a mut RSI,
@@ -994,6 +1128,7 @@ pub mod core {
         where R:SpecRead;
     }
 
+    // Default Serializer struct
     #[allow(unused)]
     pub struct DefaultSerializer;
 
@@ -1080,6 +1215,7 @@ pub mod core {
         }        
     }
 
+    /// For future use to support binary and UDP protocol
     #[allow(unused)]
     pub struct Protocol {
         name: ProtocolVersion,
@@ -1089,18 +1225,21 @@ pub mod core {
         response_place_holder: ListSpec,
     }
 
+    /// For future use to support UDP protocol
     #[allow(unused)]
     pub enum Transport {
         UDP,
         TCP,
     }
 
+    /// For future use to support Text/Binary protocol
     #[allow(unused)]
     pub enum ProtocolFormat {
         Text,
         Binary,
     }
 
+    /// For future use 
     #[allow(unused)]
     pub struct ProtocolBuilder<RQI, RSI>
     where
@@ -1115,8 +1254,8 @@ pub mod core {
         response_info: Option<RSI>,
     }
 
-    #[derive(Debug,)]
-    #[allow(unused)]
+    /// Error enum to represent server/transport related errors
+    #[derive(Debug,)]    
     pub enum ServerError {
         StartError(String),
         StopError,
@@ -1124,6 +1263,7 @@ pub mod core {
         ResponseError(ParserError),
         IOError(std::io::Error),
     }
+
     #[async_trait]
     pub trait Server {
         #[allow(unused)]
@@ -1131,12 +1271,6 @@ pub mod core {
 
         #[allow(unused)]
         async fn stop(&mut self) -> Result<(), ServerError>;
-
-        /* #[allow(unused)]
-        async fn configure_mappers(&mut self) -> Result<(), ServerError>; */
-
-        /* async fn handle_request(&self, request: RQI) -> Result<RSI, ServerError>;
-        async fn send_response(&self, response: RSI) -> Result<(), ServerError>; */
     }
 
     impl From<std::io::Error> for ServerError {
@@ -2959,8 +3093,6 @@ pub mod core {
                     warn!("error when serializing spec: {} optional: is {} error:{:?}",
                      constituent.get_meta_data().get_name().to_path_string(), constituent.get_meta_data().is_optional(), result);                    
                 }
-
-                
                 
                 if result.is_err() && !constituent.get_meta_data().is_optional() {
                     //mapper_context.end_spec(self)?;

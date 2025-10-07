@@ -708,13 +708,12 @@ impl From<serde_json::Error> for ParserError {
 }
 
 
-#[allow(unused)]
+
 pub fn build_http_request_protocol() -> ListSpec {
     
     let space = " ";
     let newline = "\r\n";
-    let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
-
+    let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();        
     let request_line_placeholder= ProtoSpecBuilderData::<BuildFromScratch>::new_with(Transient("request_line".to_string()), false);
     //let request_line_placeholder = ;
 
