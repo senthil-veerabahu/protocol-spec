@@ -2,7 +2,7 @@
 //! This crate helps developers create protocol parsers by using a declarative, DSL-style approach.
 //! For e.g, developer can create custom protocol for imaginary example of sending `hello world`` to server upon connection 
 //! using the below code
-//! ```
+//! ```ignore
 //! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 //! let spec = spec_builder
 //! .inline_value_follows(SpecName::NoName, true)
@@ -19,7 +19,7 @@
 //! Inline Value specifies that the key is the SpecName and value is available in the protocol payload
 //! In the above example, Key is `greeting`(from spec name) and value is `hello`
 //! 
-//! ```
+//! ```ignore
 //! .inline_value_follows(SpecName::NoName, true)
 //! .expect_string(SpecName::Name("greeting".to_string()), false).delimited_by_space()
 //! ```
@@ -32,7 +32,7 @@
 //! 
 //! The protocol can be thought of tree of individual data items and each individual data items can be represented using the spec builder.
 //! For e.g in http request,
-//! ```
+//! ```ignore
 //! PUT /vote HTTP/1.1
 //! Content-Type: application/json
 //! Content-Length: 21
@@ -48,7 +48,7 @@
 //! 
 //! Each header can be represented as below
 //! 
-//! ```
+//! ```ignore
 //! let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));    
 //! let header_place_holder = header_placeholder_builder
 //! .key_follows(Name("header_name".to_string()), true)
@@ -68,14 +68,16 @@
 //! 
 //! http headers can be repeated many times and it ends with a extra newline character. This can be represented as below using repeat_many function
 //! 
-//! ```
+//! ```ignore
 //! let spec_builder = spec_builder.repeat_many(Name("headers".to_owned()), true, 
 //! Separator::Delimiter("\r\n".to_owned()),header_place_holder)
 //! ```
 //! 
 //! Entire http request can be represented as spec
 //! 
-//! ```
+//! 
+//! ```ignore
+//!  
 //! pub fn build_http_request_protocol() -> ListSpec {
 //!    
 //!    let space = " ";
