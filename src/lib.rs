@@ -2,7 +2,8 @@
 //! This crate helps developers create protocol parsers by using a declarative, DSL-style approach.
 //! For e.g, developer can create custom protocol for imaginary example of sending `hello world`` to server upon connection 
 //! using the below code
-//! ```ignore
+//! ```
+//! use crate::common::*;
 //! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 //! let spec = spec_builder
 //! .inline_value_follows(SpecName::NoName, true)
@@ -18,20 +19,26 @@
 //! ### InlineKeyValue 
 //! Inline Value specifies that the key is the SpecName and value is available in the protocol payload
 //! In the above example, Key is `greeting`(from spec name) and value is `hello`
-//! 
-//! ```ignore
-//! .inline_value_follows(SpecName::NoName, true)
-//! .expect_string(SpecName::Name("greeting".to_string()), false).delimited_by_space()
 //! ```
-//! delimited_by_space specifies that the string `hello` ends with space. 
-//! It is also possible to specify data in other data types e.g u32.
-//! In that case, the spec becomes as below. The boolean in inline_value_follows and expect_u32 specifies whether the data is optional.
-//! 
+//! use crate::common::*;
+//! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
+//! let spec = spec_builder
 //! .inline_value_follows(SpecName::NoName, true)
-//! .expect_u32(SpecName::Name("somedata"), false)
-//! 
+//! .expect_string(SpecName::Name("greeting".to_string()), false).delimited_by_space();
+//! ```
+//! `delimited_by_space` specifies that the string `hello` ends with space. 
+//! It is also possible to specify data in other data types e.g u32.
+//! In that case, the spec becomes as below. The boolean in `inline_value_follows` and `expect_u32` specifies whether the data is optional.
+//! ```
+//! use crate::common::*;
+//! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
+//! let spec = spec_builder
+//! .inline_value_follows(SpecName::NoName, true)
+//! .expect_u32(SpecName::Name("somedata"), false);
+//! ```
 //! The protocol can be thought of tree of individual data items and each individual data items can be represented using the spec builder.
 //! For e.g in http request,
+//! 
 //! ```ignore
 //! PUT /vote HTTP/1.1
 //! Content-Type: application/json
@@ -39,7 +46,8 @@
 //! 
 //! {option:1, id:"a1234"}
 //! ```
-//! Http request can be thought of request line followed by one or more Key value pairs followed by new line and payload data.
+//! 
+//! Http request can be thought of as request line followed by one or more key-value pairs followed by new line and payload data.
 //! Each data here is represented as Spec. Spec contains metadata including a name(SpecName) and flag representing optionality of the spec
 //! Each Spec can be serialized and deserialized.
 //! 
@@ -48,7 +56,8 @@
 //! 
 //! Each header can be represented as below
 //! 
-//! ```ignore
+//! ```
+//! use crate::common::*;
 //! let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));    
 //! let header_place_holder = header_placeholder_builder
 //! .key_follows(Name("header_name".to_string()), true)
@@ -68,7 +77,8 @@
 //! 
 //! http headers can be repeated many times and it ends with a extra newline character. This can be represented as below using repeat_many function
 //! 
-//! ```ignore
+//! ```
+//! use crate::common::*;
 //! let spec_builder = spec_builder.repeat_many(Name("headers".to_owned()), true, 
 //! Separator::Delimiter("\r\n".to_owned()),header_place_holder)
 //! ```
@@ -76,8 +86,8 @@
 //! Entire http request can be represented as spec
 //! 
 //! 
-//! ```ignore
-//!  
+//! ```
+//! use crate::common::*;
 //! pub fn build_http_request_protocol() -> ListSpec {
 //!    
 //!    let space = " ";
@@ -3522,37 +3532,63 @@ pub mod builders{
     use crate::core::{DelimitedSpec, DelimitedStringSpec, ExactStringSpec, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, NumberI16Spec, NumberI64Spec, NumberU16Spec, NumberU32Spec, NumberU64Spec, OneOfSpec, ProtocolSpec, RepeatCount, RepeatManySpec, Separator, Spec, SpecMetaData, SpecName, StringSpec, ValueSpec, ValueType};
 
 
-    ///
+    /// trait represents the current state of the builder
     pub trait BuilderState:Default{}
 
+    /// trait represents the current state of the string builder
     pub trait BuildGenericString:BuilderState{}
 
-    // Builder States
+    /// Builder States
 
+    /// struct to represent the initial state of builder and a stating start for moving to other states
+    /// Following transitions are possible
+    /// BuildFromScratch -> BuildKey
+    /// BuildFromScratch -> BuildInlineValue
+    /// BuildFromScratch -> BuildDelimiter    
     #[derive(Default)]
     pub struct BuildFromScratch{}
 
+    /// struct to represent the initial state to produce KeyValueSpec i.e building the key
+    /// Following transitions are possible
+    /// BuildKey -> BuildDelimiter
+    /// BuildKey -> BuildKeyAvailable
     #[derive(Default)]
     pub struct BuildKey{
         key_spec_metadata: SpecMetaData,
     }
 
+    /// struct to represent KeyValue Spec state where key is already specified and available
+    /// Following transitions are possible
+    /// BuildKeyAvailable -> BuildValue
+    /// 
     #[derive(Default)]
     pub struct BuildKeyAvailable{
         key: Key,
     }
 
+    /// struct to represent KeyValue Spec state where Value is ready to be built    
+    /// Following transitions are possible
+    /// BuildValue -> BuildDelimiter
+    /// BuildValue -> BuildFromScratch
     #[derive(Default)]
     pub struct BuildValue{
         key: Key,
         value_spec_metadata: SpecMetaData,
     }
 
+    /// struct to represent state which allows building InlineKeyValue Spec. We can have the below transitions
+    ///  BuildInlineValue -> BuildDelimiter
+    ///  BuildInlineValue -> BuildFromScratch
     #[derive(Default)]
     pub struct BuildInlineValue{        
         value_spec_metadata: SpecMetaData,
     }
-    
+
+
+    /// struct to represent state which allows building DelimitedStringSpec. We can have the below transitions
+    ///  BuildDelimiter -> BuildFromScratch
+    ///  BuildDelimiter -> BuildValue
+    ///  BuildDelimiter -> BuildKeyAvailable    
     #[derive(Default)]
     pub struct BuildDelimiter<D:DelimitedSpec, B:BuilderState>{
         delimiter_spec: D,
@@ -3564,7 +3600,6 @@ pub mod builders{
     impl  BuilderState for BuildFromScratch{}
     impl  BuildGenericString for BuildFromScratch{}
     impl  BuilderState for BuildKey{}
-    //impl  BuildKeyString for BuildKey{}
     impl  BuilderState for BuildValue{}
     impl  BuilderState for BuildKeyAvailable{}
     impl  BuilderState for BuildInlineValue{}
@@ -3572,7 +3607,7 @@ pub mod builders{
     impl <D, B> BuilderState for BuildDelimiter<D, B> where D: DelimitedSpec, B:BuilderState{}
 
     
-    //Proto Spec Builder trait
+    //Proto Spec Builder with current state as generic parameter 
     pub trait ProtoSpecBuilder<S:BuilderState>: Default{
         fn build(self) -> ListSpec;
         fn add_spec(&mut self, spec: Box<dyn ProtocolSpec>);
@@ -3585,10 +3620,13 @@ pub mod builders{
         fn replace_current_spec_with_default(&mut self) -> ListSpec;
     }
 
-    // Struct implementing Spec Builder 
+    /// Struct that implements implementing ProtoSpecBuilder 
     #[derive(Default)]
     pub struct ProtoSpecBuilderData<S:BuilderState>{
+        ///  ListSpec that contains Specs added by builder
         composite_spec: ListSpec,
+
+        ///Current Spec Builder state
         state: S,
     }
 
@@ -3668,7 +3706,7 @@ pub mod builders{
     }
     
     //Generators
-
+    ///Creates various types of number spec e.g NumberU16Spec, NumberI16Spec
     pub trait NumberSpecGenerator {
         fn get_u16_spec(&self, name: SpecName, optional: bool) -> NumberU16Spec{
             NumberU16Spec(SpecMetaData::new(name, ValueType::UnSignedNumber16, optional))       
@@ -3687,6 +3725,7 @@ pub mod builders{
         }
     }
 
+    /// Creates String spec e.g DelimitedStringSpec
     pub trait StringSpecGenerator{
         fn get_string_spec(&self, name: SpecName, optional: bool) -> DelimitedStringSpec where  Self:Sized{
             DelimitedStringSpec { 
@@ -3714,6 +3753,7 @@ pub mod builders{
     impl  NumberSpecBuilder<BuildInlineValue, BuildFromScratch, ProtoSpecBuilderData<BuildFromScratch>>
     for ProtoSpecBuilderData<BuildInlineValue>{}
     
+    /// Build that allows custom spec to be added into the Spec tree
     pub trait CustomSpecBuilder<IBS>: ProtoSpecBuilder<IBS>
     where IBS: BuilderState + 'static,
     {
@@ -3833,6 +3873,7 @@ pub mod builders{
     
 
 
+    /// Trait that allows to adding ListSpec to Spec Builder
     pub trait CompositeBuilder<IBS, OBS>: ProtoSpecBuilder<IBS>
     where 
         IBS: BuilderState + 'static,
@@ -3883,6 +3924,7 @@ pub mod builders{
 
     impl RepeatBuilder<BuildFromScratch, BuildFromScratch> for ProtoSpecBuilderData<BuildFromScratch>{}
 
+    /// Trait that allows to adding delimited string spec to Spec Builder
     pub trait DelimitedStringSpecBuilder <IBS> :StringSpecGenerator + ProtoSpecBuilder<IBS>  
     where 
         Self: Sized + 'static,
@@ -3911,6 +3953,7 @@ pub mod builders{
 
     }
     
+    /// Trait that allows to adding known string spec to Spec Builder
     pub trait StringSpecBuilder <IBS, OBS> :StringSpecGenerator + ProtoSpecBuilder<IBS>  
     where 
         Self: Sized + 'static,
@@ -4004,11 +4047,14 @@ pub mod builders{
     {       
     }
 
+    /// Wrapper that contains another ProtoSpecBuilder and some arbitrary intermediate data
     pub struct BuilderWrapperWithData<B,D, BS>(B, D , PhantomData<BS> ) 
     where
         B:ProtoSpecBuilder<BS> + 'static, 
         BS:BuilderState + 'static;
     
+
+    ///Wrapper that contains another ProtoSpecBuilder
     pub struct BuilderWrapper<B,BS>(B , PhantomData<BS> ) where B:ProtoSpecBuilder<BS> + 'static, BS:BuilderState + 'static;
 
      impl <D, IBS> From<BuilderWrapperWithData<ProtoSpecBuilderData<IBS>, D, IBS>> for ProtoSpecBuilderData<IBS> 
@@ -4207,13 +4253,7 @@ pub mod builders{
         }
     }
 
-    //Generators
-    impl <OBS> DelimiterGenerator for ProtoSpecBuilderData<OBS> 
-    where 
-        OBS: BuilderState
-    {}
-
-
+    /// trait that allows adding delimiters
     #[allow(dead_code)]
     pub trait DelimiterGenerator{
         fn get_newline(&self) -> Separator{
@@ -4227,6 +4267,16 @@ pub mod builders{
         }
     }
 
+    /// Delimiter Generator e.g creates newline, space or other delimiters
+    impl <OBS> DelimiterGenerator for ProtoSpecBuilderData<OBS> 
+    where 
+        OBS: BuilderState
+    {}
+
+    /// DelimiterBuilder that allows adding delimiter for any input -> output state
+    /// IBS - Input Builder State
+    /// OBS - Output Builder State
+    /// D - DelimitedSpec implementation e.g DelimitedStringSpec or OneOfSpec
     pub trait DelimiterBuilder<D,IBS,  OBS>: ProtoSpecBuilder<BuildDelimiter<D, IBS>> + DelimiterGenerator
     where 
         D: DelimitedSpec + 'static,
@@ -4267,11 +4317,14 @@ pub mod builders{
     }
 
 
+    /// DelimiterBuilder implementation for ProtoSpecBuilderData<BuildDelimiter<D, IBS>>
+    /// IBS - Input Builder State
+    /// OBS - Output Builder State
+    /// D - DelimitedSpec implementation e.g DelimitedStringSpec or OneOfSpec 
    impl <D, IBS, OBS> DelimiterBuilder<D, IBS, OBS> for ProtoSpecBuilderData<BuildDelimiter<D, IBS>>
    where D: DelimitedSpec + 'static,
          IBS: BuilderState + 'static,
          OBS: BuilderState + 'static,
-        
    {}
 
    
