@@ -856,8 +856,8 @@ mod tests {
     use tokio::io::BufReader;
     use tokio_stream::StreamExt;
     use tracing::{debug, warn};
-
-    use crate::core::{new_spec_builder, CompositeBuilder, DefaultSerializer, DelimitedStringSpecBuilder, DelimiterBuilder, InfoProvider, InlineValueBuilder, KeySpecBuilder, Mapper, ProtoSpecBuilder, RepeatBuilder, RequestSerializer, StringSpecBuilder, ValueBuilder};
+    use crate::core::builders::{new_spec_builder, CompositeBuilder, DelimitedStringSpecBuilder, DelimiterBuilder, InlineValueBuilder, KeySpecBuilder, ProtoSpecBuilder, RepeatBuilder,  ValueBuilder, StringSpecBuilder};
+    use crate::core::{ DefaultSerializer, InfoProvider, Mapper,   RequestSerializer, };
     use crate::core::{protocol_reader::ProtoStream, SpecName};
     
     use crate::mapping_extractor::{DefaultMapper, SpecTraverse};

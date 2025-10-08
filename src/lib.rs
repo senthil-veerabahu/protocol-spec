@@ -148,11 +148,13 @@ pub mod common{
         SpecRead, SpecWrite, Value, InfoProvider,
          Mapper, RequestInfo, ResponseInfo, ParserError, 
          RequestHandler, ResponseHandler, RequestFactory, ResponseFactory, RequestErrorHandler, ResponseErrorHandler, RequestSerializer, ResponseSerializer, DefaultSerializer,
-        ProtocolConfig, ProtoSpecBuilderData, BuildFromScratch,
-        InlineValueBuilder, KeySpecBuilder, RepeatBuilder, DelimitedStringSpecBuilder, 
-        NumberSpecBuilder, DelimiterBuilder, ProtoSpecBuilder, ValueBuilder, CompositeBuilder, CustomSpecBuilder, 
-        new_mandatory_spec_builder, Separator,
+        ProtocolConfig,  Separator,
         SpecName, ValueType,  ValueExtractor, SpecSerialize, SpecDeserialize };
+
+        pub use crate::core::builders::{ProtoSpecBuilderData, BuildFromScratch,
+        InlineValueBuilder, KeySpecBuilder, RepeatBuilder, DelimitedStringSpecBuilder, 
+        NumberSpecBuilder, DelimiterBuilder, ProtoSpecBuilder, ValueBuilder, CompositeBuilder, CustomSpecBuilder, StringSpecBuilder,
+        new_mandatory_spec_builder};
 }
 
 /// mapping_extractor specifies how to traverse tree of spec to build metadata required for parsing and querying
@@ -424,9 +426,9 @@ pub mod core {
     
     
     use std::collections::HashMap;
-    use std::marker::PhantomData;
+    
     use std::{
-        fmt::{Debug, Display, Formatter}, mem::{self}, str::Utf8Error
+        fmt::{Debug, Display, Formatter}, str::Utf8Error
     };
     use tokio::{
         io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
@@ -1130,10 +1132,11 @@ pub mod core {
         where R:SpecRead;
     }
 
-    // Default Serializer struct
+    /// Default Serializer struct
     #[allow(unused)]
     pub struct DefaultSerializer;
 
+    /// RequestSerializer implementation for default serializer
     #[async_trait]
     impl<REQI>
         RequestSerializer<REQI> for DefaultSerializer
@@ -1162,26 +1165,12 @@ pub mod core {
         )  -> Result<&'a mut REQI, ParserError> 
         where B:AsyncRead + Unpin + Send + Sync  {
             let mut protocol_reader = ProtocolBuffReader::new( BufReader::new(reader), 1024);
-            spec.deserialize(request_info,&mut  protocol_reader, true).await?;
-            /* if let Err(parser_error) = parse_result{
-                if let ParserError::EndOfStream = parser_error  {
-                    if request_info.has_all_data() {
-                        return Ok(request_info);
-                    }
-                    return Err(ParserError::EndOfStream);
-                } else {
-                    return Err(parser_error);
-                }
-            } */
-           //todo!("do we need the above error handling");
+            spec.deserialize(request_info,&mut  protocol_reader, true).await?;            
             Ok(request_info)
         }        
     }
-
     
-
-    
-
+    /// Response serializer implementation for DefaultSerializer
     #[async_trait]
     impl<RESI>
         ResponseSerializer<RESI> for DefaultSerializer
@@ -1199,9 +1188,6 @@ pub mod core {
             serialize(spec, &response_info, &mut protocol_writer, &mut mapper_context).await?;
             Ok(())
         }
-
-        //(&self, mut response_info: RSI,reader: R, spec: &Placeholder)
-        //async fn deserialize_from(&self,  response_info: &mut RSI,reader: &mut BufReader<&mut R>, spec: &Placeholder) -> Result<RSI, ParserError>;
 
         async fn deserialize_from<'a, R>(
             &self,
@@ -1266,54 +1252,84 @@ pub mod core {
         IOError(std::io::Error),
     }
 
+    /// Trait representing Server behaviour/operations
     #[async_trait]
     pub trait Server {
+
+        /// Starts the server. It could establish socket binding on a given ip
         #[allow(unused)]
         async fn start(&'static mut self) -> Result<(), ServerError>;
 
+        /// Stops the server. It unbind itself from socket
         #[allow(unused)]
         async fn stop(&mut self) -> Result<(), ServerError>;
     }
 
+    /// From implementation for io::Error to ServerError conversion
     impl From<std::io::Error> for ServerError {
         fn from(error: std::io::Error) -> Self {
             ServerError::IOError(error)
         }
     }
 
+    /// Config trait that only contains associated types. 
+    /// Associated types are used to avoid having multiple Generic parameters.
     pub trait ProtocolConfig: Send + Sync
     {
+        /// Type for RequestFactory
         type REQF: RequestFactory<Self::REQI, Self::REQSER, Self::REQH, Self::REQERRH, Self::RESI>;
+
+        /// Type for ResponseFactory
         type RESF: ResponseFactory<Self::RESI, Self::RESSER, Self::RESH, Self::RESERRH>;
+
+        /// Type for RequestInfo
         type REQI: RequestInfo;
+
+        /// Type for ResponseInfo
         type RESI: ResponseInfo;
+
+        /// Type for Request Serializer
         type REQSER: RequestSerializer<Self::REQI>;
+
+        /// Type for Response Serializer
         type RESSER: ResponseSerializer<Self::RESI>;
 
+        /// Type for Request Handler
         type REQH: RequestHandler<Self::REQI, Self::RESI>;
+
+        /// Type for Response Handler
         type RESH: ResponseHandler<Self::RESI>;
+
+        /// Type for Request Error Handler
         type REQERRH: RequestErrorHandler<Self::REQI, Self::RESI>;
+
+        /// Type for Response Error Handler
         type RESERRH: ResponseErrorHandler<Self::RESI>;
     }
 
+    /// Wrapper for requestfactory that is aware of Mapper( traversal of the spec that generates metadata about the Spec). 
+    /// During the server initialization, Request Spec is first created, it needs to be traversed
+    /// and meta data information about thr spec is created.
+    ///  This metadata information is then cloned into each RequestInfo before it is serialized/deserialized
     struct MapperAwareRequestFactory<T> where T:ProtocolConfig{
         inner: T::REQF,
         mapper: Box<dyn Mapper>,
     }
 
+    /// Wrapper for ResponseFactory that is aware of Mapper( traversal of the spec that generates metadata about the Spec). 
+    /// During the server initialization, Response Spec is first created, it needs to be traversed
+    /// and meta data information about thr spec is created.
+    ///  This metadata information is then cloned into each ResponseInfo before it is serialized/deserialized
     struct MapperAwareResponseFactory<T> where T:ProtocolConfig{
         inner: T::RESF,
         mapper: Box<dyn Mapper>,
     }
-    /*
-     REQI: RequestInfo,
-        REQSER: RequestSerializer<REQI>,
-        REQH: RequestHandler<REQI, RESI>,
-        REQERRH: RequestErrorHandler<REQI, RESI>,
-        RESI: ResponseInfo,
-     */
 
+
+    ///Mapper factory implementation
     impl <T> MapperAwareRequestFactory<T> where T: ProtocolConfig{
+
+        /// New method (constructor). The wrapped request spec is traversed first before Creating new MapperAware RequestFactory
         fn new(inner: T::REQF) -> Self{
             
             let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
@@ -1325,11 +1341,16 @@ pub mod core {
         }
     }
 
+    /// Request factory implementation for MapperAwareRequestFactory
     impl <T> RequestFactory<T::REQI, T::REQSER, T::REQH, T::REQERRH, T::RESI> for MapperAwareRequestFactory<T> where T: ProtocolConfig{
+
+        /// returns the requst spec from wrapped MapperAwareRequestFactory
         fn get_request_spec(&self) -> &Box<dyn ProtocolSpec> {
             self.inner.get_request_spec()
         }
     
+
+        /// Creates Request Info. The request info is populated with the metadata information about the Request Spec
         fn create_request_info(&self) -> T::REQI {
             let mut request_info = self.inner.create_request_info();
             self.mapper.get_mapping_data_template().clone_into(request_info.get_mapper_mut().get_mapping_data_template_mut());
@@ -1337,20 +1358,26 @@ pub mod core {
 
         }
     
+        /// Delegates to inner factory
         fn create_request_serializer(&self) -> T::REQSER {
             self.inner.create_request_serializer()
         }
     
+        /// Delegates to inner factory
         fn create_request_handler(&self) -> T::REQH {
             self.inner.create_request_handler()
         }
-    
+
+        /// Delegates to inner factory
         fn create_error_request_handler(&self) -> T::REQERRH {
             self.inner.create_error_request_handler()
         }
     }
 
+    /// Response Mapper Factory Implementation
     impl <T> MapperAwareResponseFactory<T> where T: ProtocolConfig{
+
+        /// New method (constructor). The wrapped response spec is traversed first before Creating new MapperAware ResponseFactory
         fn new(inner: T::RESF) -> Self{
             
             let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
@@ -1363,10 +1390,13 @@ pub mod core {
     }
 
     impl <T> ResponseFactory<T::RESI, T::RESSER, T::RESH, T::RESERRH, > for MapperAwareResponseFactory<T> where T: ProtocolConfig{
+
+        /// Delegates to inner factory
         fn get_response_spec(&self) -> &Box<dyn ProtocolSpec> {
             self.inner.get_response_spec()
         }
     
+        /// Creates Response Info. The response info is populated with the metadata information about the Response Spec
         fn create_response_info(&self) -> Result<T::RESI, ParserError> {
             let mut response_info = self.inner.create_response_info()?;
             self.mapper.get_mapping_data_template().clone_into(response_info.get_mapper_mut().get_mapping_data_template_mut());
@@ -1375,19 +1405,24 @@ pub mod core {
 
         }
     
+        /// Delegates to inner factory
         fn create_response_serializer(&self) -> T::RESSER {
             self.inner.create_response_serializer()
         }
-    
+
+        /// Delegates to inner factory
         fn create_response_handler(&self) -> T::RESH {
             self.inner.create_response_handler()
         }
     
+        /// Delegates to inner factory
         fn create_error_response_handler(&self) -> T::RESERRH {
             self.inner.create_error_response_handler()
         }
     }
     
+    /// Represents the instance of the server. Each instance contains list of host/ip address to bind to, request factory, response factory
+    /// and list of listeners(bound instance that can latter be unbound)
     #[derive(Builder)]
     #[builder(pattern = "owned")]
     pub struct ServerInstance<CFG> 
@@ -1404,6 +1439,7 @@ pub mod core {
         listeners: Vec<TcpListener>,
     }
 
+    /// Builder for server instance
     impl <CFG:ProtocolConfig> ServerInstanceBuilder<CFG>    {
         pub fn request_factory( mut self, value: CFG::REQF) ->  Self{
             self.request_factory = Some(MapperAwareRequestFactory::new(value));
@@ -1421,7 +1457,7 @@ pub mod core {
     where CFG: ProtocolConfig,
                  
     {
-        #[allow(unused)]
+        /// Creates listeners and self.listener is updated with the TCPListener instances
         async fn create_listeners(&mut self) -> Result<(), ServerError> {
             for host in &self.hosts {
                 let option = host.split_once(":");
@@ -1442,6 +1478,7 @@ pub mod core {
             Ok(())
         }
 
+        /// Infinites loop that waits for client connection
         async fn accept_connections(&'static self, tcp_listener: &'static TcpListener) {
             tokio::spawn(async move {
                 loop {
@@ -1458,6 +1495,7 @@ pub mod core {
             });
         }
 
+        /// handles connection that is established. 1) deserializes the request 2)forward the request to handlers to get response 3) Serializes the response
         async fn handle_connection(&'static self, mut socket: TcpStream) -> Result<(), ParserError> {
             let mut req_info = self.request_factory.create_request_info();
             let serializer = self.request_factory.create_request_serializer();            
@@ -1499,10 +1537,13 @@ pub mod core {
         }
     }
 
+    /// Server implementation for server instance
     #[async_trait]
     impl<CFG> Server for ServerInstance<CFG> 
     where CFG: ProtocolConfig{
-        async fn start(&'static mut self) -> Result<(), ServerError> {
+
+        /// Starts the server
+        async fn start(&'static mut self) -> Result<(), ServerError>  {
             self.create_listeners().await?;
             
             for listener in &self.listeners {
@@ -1512,85 +1553,39 @@ pub mod core {
 
             Ok(())
         }
-
+        /// Stops the server
         async fn stop(&mut self) -> Result<(), ServerError> {
-            todo!()
-        }
-
-        
-        
-       /*  async fn configure_mappers(&mut self) -> Result<(), ServerError>{
-            //configure request mapper templates
-            
-
-            //configure response mapper templates
-            let mapper = self.response_factory.get_default_mapper_mut();
-            let spec = self.response_factory.get_response_spec();
-            spec.traverse(mapper);
+            // removes the listener from vec so that the listener instances can be dropped
+            // the listener unbinds itself during drop
+            self.listeners.clear();
             Ok(())
-        } */
-    }
-
-    #[allow(unused)]
-    pub trait Processor {
-        fn process(_req: Request, _res: Response) {
         }
+
     }
 
+    /// Future use
     #[allow(unused)]
     pub struct ProtocolVersion {
         name: String,
         version: Option<String>,
     }
-
-    pub struct Request {}
-
-    pub struct Response {}
-
-    pub enum HeaderValue{
-        String,
-        
-    }
-
-    #[allow(unused)]
-    pub enum PlaceHolderIdentifier {
-        #[allow(unused)]
-        Name(String),
-        #[allow(unused)]
-        Key,
-        InlineKeyWithValue(String),
-        Value,
-    }
-
-    impl Default for PlaceHolderIdentifier {
-        fn default() -> Self {
-            PlaceHolderIdentifier::Name(String::new())
-        }
-    }
-
-    impl Debug for PlaceHolderIdentifier{
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Name(arg0) => f.debug_tuple("Name").field(arg0).finish(),
-            Self::Key => write!(f, "Key"),
-            Self::InlineKeyWithValue(arg0) => f.debug_tuple("InlineKeyWithValue").field(arg0).finish(),
-            Self::Value => write!(f, "Value"),
-        }
-    }
-    }
-
-    #[allow(dead_code)]
-    trait TokenParser {
-        async fn read_string(until_delimiter: String) -> String;
-    }
+    
+    /// Marker Trait for reading spec
     pub trait SpecRead: PlaceHolderRead + MarkAndRead + AsyncRead + Unpin + Send + Sync {
     }
 
+    /// Marker Trait for writing spec
     pub trait SpecWrite: PlaceHolderWrite + AsyncWrite + Unpin + Send + Sync {
     }
 
+    ///Trait represending deserialization behaviour
     #[async_trait]
     pub trait SpecDeserialize: Send + Sync {
+
+        /// deserializes protocol data from reader using the spec and populates info_provider
+        /// * info_provider - populates the info_provider param after deserializing it. Populating it is optional based on `update_info` flag 
+        /// * reader - Underlying Reader
+        /// * update_info - flag to populate info_provider(info provider is updated if the value is true)
         async fn deserialize (
             &self,
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
@@ -1598,24 +1593,28 @@ pub mod core {
         ) -> Result<Value, ParserError>;
     }
 
+    /// Wrapper Deserializer 
     struct SpecDeserializer<'a, S> where S: SerializableSpec{
         inner: &'a S
     }
 
+    /// Wrapper Serializer 
     struct SpecSerializer<'a, S> where S: ProtocolSpec + ?Sized{
         inner: &'a S
     }
 
-    
+    /// mapper_context is updated with the spec information that is currently deserialized
     fn begin<S>(spec:&S, mapper_context:&mut MapperContext) where S: SerializableSpec{
             let spec_type = spec.to_spec_type();
             mapper_context.start_spec_type(spec_type);
     }
 
+    /// mapper_context is updated to remove the last known spec
     fn end_current_context(mapper_context: &mut MapperContext){
         mapper_context.end_current_spec();
     }
 
+    /// serializes tje spec `spec` into the `writer` based on data in `info_provider`
     async fn serialize<S>(spec: &S, info_provider: & ( dyn InfoProvider + Send + Sync ), 
         writer: &mut (dyn SpecWrite), 
         mapper_context: &mut MapperContext) -> Result<(), ParserError>
@@ -1627,6 +1626,8 @@ pub mod core {
         return serialier.serialize(info_provider, mapper_context, writer).await;
     }
 
+    /// SpecSerialize implementation of SpecSerializer.  current spec is added to mapper_context before serialization
+    /// and is removed from mapper context after the spec is serialized
     #[async_trait]
     impl<'a, S> SpecSerialize for SpecSerializer<'a, S> where S:ProtocolSpec + ?Sized{
 
@@ -1645,6 +1646,8 @@ pub mod core {
         }
     }
 
+    /// SpecSerialize implementation of SpecSerializer.  current spec is added to mapper_context before deserialization
+    /// and is removed from mapper context after the spec is deserialized
     #[async_trait]
     impl <'a, S> SpecDeserialize for SpecDeserializer<'a, S> where S:SerializableSpec{
         async fn deserialize (
@@ -1656,31 +1659,10 @@ pub mod core {
             let value_result = self.inner.deserialize(info_provider, reader, update_info).await;
             end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
             return value_result;
-            
-            /* if let Ok(value) = value_result{
-                if let SpecName::Name(_) = self.inner.get_meta_data().get_name() {
-                    let context: &mut MapperContext = info_provider.get_mapper_mut().get_mapper_context_mut();
-                    let spec_name = context.get_last_available_spec_name();
-                    if update_info{
-                        info_provider.get_mapper_mut().get_spec_data_mut().insert(spec_name, value );
-                    }
-                    end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
-                    return Ok(Value::None);
-                }else{
-                    end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
-                    return Ok(value);
-                } 
-                
-            }else {
-                end_current_context(info_provider.get_mapper_mut().get_mapper_context_mut());
-                return value_result;
-            }*/
-            
-            // should we clone the value instead of sending None?
-            
         }
     }
 
+    /// Enum for different type of specs supported. Currently only Composite, RepeatMany and Simple spec are used
     #[derive(Clone, Debug, )]
     pub enum SpecType{
         Composite(SpecName),
@@ -1691,6 +1673,7 @@ pub mod core {
         Simple(SpecName),
     }
 
+    /// PartialEq implementation for SpecType based on SpecName
     impl PartialEq for SpecType{
         fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -1705,10 +1688,11 @@ pub mod core {
     }
 
     impl SpecType{
-        fn to_path_template_string(&self) ->String{
 
-            match self{
-                
+
+        /// returns the template used to lookup the spectype. Spec Name is returned except for RepeatMany where the name with place holder for count is returned e.g header_name.{}
+        fn to_path_template_string(&self) ->String{            
+            match self{                
                 SpecType::RepeatMany(spec_name, _, _) => format!("{}.{{}}", spec_name.to_path_string()),
                 SpecType::Composite(spec_name) | 
                 SpecType::Key(spec_name) | 
@@ -1717,6 +1701,7 @@ pub mod core {
             }
         }
 
+        /// returns the path used to lookup the spectype. Spec Name is returned except for RepeatMany where the name with current count/index is returned e.g header_name.0
         fn to_path_string(&self) ->String{
             match self{
                 SpecType::RepeatMany(name, _, current_index) => format!("{}.{}", name.to_name_string(), current_index),
@@ -1730,8 +1715,11 @@ pub mod core {
     }
 
     
+    /// trait to represent serialization behaviour
     #[async_trait]
-        pub trait  SpecSerialize: Send + Sync/* :Spec */{
+    pub trait  SpecSerialize: Send + Sync/* :Spec */{
+
+        /// serializes current spec into `writer` using the info_provider and `mapper_context`
         async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
@@ -1740,14 +1728,25 @@ pub mod core {
         
     }
 
+    /// Each spec in crate is provided with a optional name. The name can be different types
+    /// This enum list different name types
     #[derive(PartialEq, Clone, Debug)]
     pub enum SpecName{
+
+        /// NoName - name is absent
         NoName,
+
+        /// Name that is of significance and holds valid protocol data
         Name(String),
+
+        /// Name that is of no significance and holds no valid protocol data and it can be only used for debuggin purposes
         Transient(String),
+
+        ///The spec is a delimiter 
         Delimiter
     }
 
+    /// Display implementation
     impl Display for SpecName{
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self{
@@ -1759,6 +1758,7 @@ pub mod core {
         }
     }
 
+    /// SpecName to string converesion.
     impl SpecName{
         fn to_path_string(&self) -> String{
             match self{
@@ -1777,21 +1777,8 @@ pub mod core {
             }
         }
     }
-
-    impl Into<String> for &SpecName{
-        fn into(self) -> String {
-            if let SpecName::Name(name) = self{
-                return name.to_owned();
-            }
-
-            if let SpecName::Transient(name) = self{
-                return name.to_owned();
-            }
-
-            "default".to_owned()
-        }
-    }
  
+    ///Serialization implementation for InlineKeyWithValue spec
     #[async_trait]
     impl SpecSerialize for InlineKeyWithValue{
         
@@ -1808,15 +1795,15 @@ pub mod core {
         }
     }
 
-    /* struct UndoableDeserializer<'a, S> where S:SpecDeserialize {
-        inner:  &'a S
-    } */
-
+    /// wrapper for spec deserializer. the `inner` field contains the underlying deserializer
    struct UndoableDeserializer<'a, S> where S: SerializableSpec{
         inner:  SpecDeserializer<'a, S>,
     }
 
-    async fn peek_undoable_deserialize<S>(spec: &S,  info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead), update_info: bool,) -> Result<Value, ParserError>
+
+    /// The function peek ahead into the reader and tries to perform deserialization.
+    ///  The reader is reset to last known state after deserialization
+    async fn peek_ahead_and_deserialize<S>(spec: &S,  info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead), update_info: bool,) -> Result<Value, ParserError>
         where S: SerializableSpec {           
 
             let marker = reader.mark();
@@ -1834,7 +1821,7 @@ pub mod core {
     }
         
     
-
+    /// Performs deserialization that can be undone incase of error
     async fn undoable_deserialize<S>(spec: &S, info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead), update_info: bool,) -> Result<Value, ParserError>
         where S: SerializableSpec {
             //SpecDeserialize
@@ -1844,18 +1831,11 @@ pub mod core {
         let undoable_serializer = UndoableDeserializer{
                 inner: serialier,
         };
-
-        
-        //test11(undoable_serializer, info_provider, reader);
         undoable_serializer.deserialize(info_provider, reader, update_info).await
         
     }
 
-     /* fn test11<S>(s:UndoableDeserializer<S>, info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead)) 
-     where S:SpecDeserialize{
-       //s.deserialize(info_provider, reader)
-    }  */
-
+    /// SpecDeserialize implementation for undiable deserializer type
     #[async_trait]
     impl <'a, T> SpecDeserialize for UndoableDeserializer<'a, T> where T:SerializableSpec{        
         async fn deserialize (
@@ -1893,10 +1873,16 @@ pub mod core {
         }
     }
 
+    /// Enum for different types of separator.
     #[derive(Debug, Clone, PartialEq)]
     pub enum Separator{
+        /// String separator
         Delimiter(String),
+
+        /// Byte serparator
         NBytes(u32),
+
+        ///End of stream as separator
         EndOfStream,
     }
 
@@ -1906,6 +1892,9 @@ pub mod core {
         }
     }   
 
+
+    /// type to store metadata of spec. Metadata contains name of spec(SpecName), data type of value represented by spec
+    /// and optionality flag
     #[derive( PartialEq)]
     pub struct SpecMetaData{
         name: SpecName,
@@ -1913,18 +1902,14 @@ pub mod core {
         optional: bool,
     }
 
+    /// trait to convert spec name to string
     trait ToName {
         fn to_name_string(&self) ->String;
     }
 
     impl ToName for SpecName{
         fn to_name_string(&self) ->String {
-            self.to_path_string()
-            /* match self{
-                SpecName::Name(name)  => name.to_owned(),
-                _ => "Default".to_owned(),
-                
-            } */
+            self.to_path_string()            
         }
     }
 
@@ -1958,31 +1943,41 @@ pub mod core {
         }
     }
 
+    /// trait to represent simple value spec. simple value could be string, numbers(u16,i16 etc), array of bytes 
     pub trait SimpleValueSpec: Spec + SpecSerialize + SpecDeserialize + MappableSpec + SpecTraverse + ToSpecType {}
 
+    /// trait to represent string spec that is delimited by a value(could be another string)
     pub trait DelimitedSpec: SimpleValueSpec + Default{
         fn set_delimiter(&mut self, delimiter: Separator) ;
         fn get_delimiter(& self) -> &Separator;
     }
 
+    /// trait to represent string spec
     pub trait StringSpec: SimpleValueSpec + Send + Sync{}
 
+    /// trait impl to ensure that all stringspec are SimpleValueSpec
     impl <T> SimpleValueSpec for T where T:StringSpec{}
 
+    /// struct to store Spec that contains delimited string. 
+    /// e.g http request method can be represented using the spec where separator is space character    
     #[derive(Default)]
     pub struct DelimitedStringSpec{
         spec_meta_data: SpecMetaData,
         until: Separator,
     }
 
+
+    /// Spec implementation for delimitedstringspec
     impl Spec for DelimitedStringSpec{
         fn get_meta_data(&self) -> &SpecMetaData {
             &self.spec_meta_data
         }
     }
 
+    /// ensure all delimitedstring spec is StringSpec implementation
     impl  StringSpec for DelimitedStringSpec{}
 
+    /// Implements DelimitedSpec for delimitedstringspec
     impl  DelimitedSpec for DelimitedStringSpec{
         fn set_delimiter(&mut self, delimiter: Separator)  {
             self.until = delimiter;
@@ -1995,13 +1990,21 @@ pub mod core {
         
     }
 
+    /// enum to represent the repeatcount for RepeatMany Spec. RepeatCount specifies when to stop the Repeat Count
+    /// repeatition will be stopped when particular count is reached or when delimiter is found 
+    
     #[derive(Clone, Debug, PartialEq)]
     pub enum RepeatCount{
+        /// Fixed count
         Fixed(u32),
+
+        /// Stop repatition when the delimiter is found
         Delimited(Separator),
     }
 
     impl RepeatCount{
+
+        /// Serializer for RepeatCount
         async fn serialize (
             &self,
             _info_provider: & ( dyn InfoProvider + Send + Sync ), _mapper_context: &mut MapperContext,
@@ -2038,8 +2041,10 @@ pub mod core {
         }
     }
 
+    /// Repeat many spec struct.
+    /// Nested RepeatSpecs are not supported currently. constituents field cannot contain another repeat spec
     #[derive(Default)]
-    pub struct RepeatManySpec{
+    pub struct RepeatManySpec{        
         spec_meta_data: SpecMetaData,        
         pub(crate) repeat_count: RepeatCount,
         pub(crate) constituents: ListSpec,
@@ -2052,7 +2057,7 @@ pub mod core {
     }
 
     
-
+    /// Deserialize implementation for repeatmany.
     #[async_trait]
     impl SpecDeserialize for RepeatManySpec{
         async fn deserialize(
@@ -2063,12 +2068,15 @@ pub mod core {
             // Implementation for parsing repeat many spec
             let mut repeat_count = 0;
             loop{
+
+                // serialize the constituents
                 info_provider.get_mapper_context().increment_current_repeat_spec();
                 let result = self.constituents.deserialize(info_provider, reader, update_info).await;
                 if result.is_ok() {
                     repeat_count += 1;
                 }
 
+                //Check for ending the deserialization by RepeatMany Spec is delimiter is found ot repeat_count has reached its value
                 match &self.repeat_count{
                     RepeatCount::Fixed(count) => {
                         if result.is_err() && repeat_count < *count {
@@ -2081,6 +2089,7 @@ pub mod core {
                     RepeatCount::Delimited(ref delimiter) => {
                         match delimiter{
                             Separator::Delimiter(delimiter) => {
+                                // check if next few bytes matches the delimiter
                                 let spec: Box<dyn ProtocolSpec> = Box::new(ExactStringSpec::new(SpecName::Delimiter, delimiter.clone(), false));
                                 let delimiter_result = undoable_deserialize(&spec, info_provider, reader, false).await;
                                 if delimiter_result.is_ok(){
@@ -2093,6 +2102,7 @@ pub mod core {
                             },
 
                             Separator::NBytes(n) => {
+                                // check if next few bytes matches the number
                                 let spec: Box<dyn ProtocolSpec> = Box::new(NumberU32Spec(SpecMetaData::new(SpecName::Delimiter, ValueType::UnSignedNumber32, false)));
                                 let number_read_result = undoable_deserialize(&spec, info_provider, reader, false).await;
                                 if number_read_result.is_ok() {
@@ -2109,7 +2119,8 @@ pub mod core {
                             Separator::EndOfStream => {
                                 //try to read a single byte 
                                 let spec: Box<dyn ProtocolSpec> = Box::new(NBytesSpec::new(SpecName::Delimiter, 1, false));
-                                let peek_result = peek_undoable_deserialize(
+                                // check if end of stream is reached
+                                let peek_result = peek_ahead_and_deserialize(
                                     &spec, info_provider, reader, update_info).await;
                                 if peek_result.is_err(){
                                     //check for end of stream
@@ -2132,6 +2143,7 @@ pub mod core {
         }
     }
 
+    /// Serializer implementation for RepeatManySpec
     #[async_trait]
     impl SpecSerialize for RepeatManySpec
     {
@@ -2167,21 +2179,28 @@ pub mod core {
         }
     }
 
-
+    ///Base trait Spec which is implemented by all specs. Spec contains metadata
     pub trait Spec: Send + Sync  {
         fn get_meta_data(&self) -> &SpecMetaData;
     }
 
+    /// implement spec for box of trait object.
     impl Spec for Box<dyn ProtocolSpec>{
+
+        // forwards the call to underlying trait object
         fn get_meta_data(&self) -> &SpecMetaData {
             (**self).get_meta_data()
         }
     }
 
+    /// SpecMapper allows adding metadata required to perform serialization and deserialization of the spec
+    /// SpecMapper for leaf spec (e.g SimpleValueSpec) simply adds the metadata to mapper. Composite Specs(e.g RepeatManySpec, ListSpec)
+    /// traverses its consituent until it reaches its leaf node.
     pub trait SpecMapper{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError>;
     }
 
+    /// SpecMapper for Box of protocol spec
     impl SpecMapper for Box<dyn ProtocolSpec>{
         fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError>  {
             (**self).add_mapping_template(mapper)?;
@@ -2189,9 +2208,10 @@ pub mod core {
         }
     }
 
-
+    /// Marker trait that specifies super trait bounds for Serialiable Spec
     pub trait SerializableSpec: Spec + SpecSerialize + SpecDeserialize + ToSpecType{}
 
+    /// SpecSerialize implementation for box that forwards to underlying trait object
     #[async_trait]
     impl SpecSerialize for Box<dyn ProtocolSpec>{
         async fn serialize (
@@ -2203,6 +2223,7 @@ pub mod core {
         }
     }
 
+    /// SpecDeserialize implementation for box that forwards to underlying trait object
     #[async_trait]
     impl SpecDeserialize for Box<dyn ProtocolSpec>{
         async fn deserialize (
@@ -2214,12 +2235,14 @@ pub mod core {
         }
     }
 
+    /// ToSpecType implementation for box that forwards to underlying trait object
     impl ToSpecType for Box<dyn ProtocolSpec>{
         fn to_spec_type(&self) ->SpecType {
             (**self).to_spec_type()
         }
     }
 
+    /// SpecTraverse implementation for box that forwards to underlying trait object
     impl SpecTraverse for Box<dyn ProtocolSpec>{
         fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
             (**self).traverse(mapper)
@@ -2227,19 +2250,25 @@ pub mod core {
     }
    
 
+    /// blanket implementation of SerializableSpec where its trait bounds are satisfied
     impl <T> SerializableSpec for T where T: Spec + SpecSerialize + SpecDeserialize + ToSpecType{}
 
+    /// Marker trait that specifies super trait bounds for Mappable Spec
     pub trait MappableSpec: Spec + SpecTraverse + SpecMapper + ToSpecType{}
 
+    /// blanket implementation of MappableSpec where its trait bounds are satisfied
     impl <T> MappableSpec for T where T: Spec + SpecTraverse + SpecMapper + ToSpecType{}
 
     
 
+    /// Marker trait that specifies super trait bounds for Protocol Spec(Any Serializable and Mappable Spec)
     pub trait ProtocolSpec: SerializableSpec + MappableSpec{        
     }
 
+    /// blanket implementation of ProtocolSpec where its trait bounds are satisfied
     impl <T> ProtocolSpec for T where T: SerializableSpec + MappableSpec{}
 
+    /// Trait Anyway allows ending(removing) of current spec from the context
     #[allow(dead_code)]
     pub(crate) trait Anyway{
         fn end_current_spec(self, mapper_context: &mut MapperContext) -> Self;
@@ -2247,19 +2276,24 @@ pub mod core {
         fn end_spec<S>(self, mapper_context: &mut MapperContext,  spec: &S) -> Self where S: ToSpecType + ?Sized;
     }
 
+    //Result implements Anyway so that it can be called on any Result object(Both Ok and Err object)
     impl <R> Anyway for Result<R, ParserError> 
     {
+        // Ends current spec from context and returns self
         fn end_current_spec(self, mapper_context: &mut MapperContext,  ) -> Self {
             mapper_context.end_current_spec();
             self
         }
 
+        // Ends given spec from context and returns self
         fn end_spec<S>(self, mapper_context: &mut MapperContext,  spec: &S) -> Self where S: ToSpecType + ?Sized{
             mapper_context.end_spec(spec)?;
             self
         }
     }
 
+    /// Mapper object holds information about Specs leading upto the current spec that are currently traverse. 
+    /// Spec could be collection of nested specs. types field contains the SpecType leading upto the current spec that is traversed/serialized/deserialized
     #[derive(Clone, Debug)]
     pub struct MapperContext{
         types: Vec<SpecType>,
@@ -2270,21 +2304,25 @@ pub mod core {
             Self { types: vec!() }
         }
 
+        /// Adds given spec ojbect to spec types
         pub fn start_spec<S>(&mut self, spec: &S) where S: ToSpecType + ?Sized{
             debug!("starting spec {}", spec.to_spec_type().to_path_string());
             self.start_spec_type(spec.to_spec_type());
         }
 
+        /// Adds given spec ojbect to spec types
         pub fn start_spec_type(&mut self, spec_type:SpecType){
             /* let x: Box<dyn ProtocolSpec> = Box::new(OneOfSpec::new(SpecName::NoName, false, vec!()));
             test_m1(x);  */
             self.types.push(spec_type);
         }
 
+        /// removes the last spec object 
         pub fn end_current_spec(&mut self){
             self.types.pop();
         } 
 
+        /// removes the given spec object, if it is the last spec
         pub fn end_spec<S>(&mut self, in_spec: &S) -> Result<(), ParserError> where 
         S: ToSpecType + ?Sized{
             debug!("");
@@ -2305,6 +2343,7 @@ pub mod core {
             Ok(())
         }
 
+        /// Increments the repeat index in the last known repeatspec
         pub fn increment_current_repeat_spec(&mut self){
             let last = self.types.last_mut();
             if let Some( repeater) = last{
@@ -2318,22 +2357,20 @@ pub mod core {
             }
         }
 
-       
+       /// Get the path of current spec .e.g if ListSpec with name 'A' contains RepeatMany spec with name B and 
+       /// RepeatManySpec contains StringSpec with name 'C', the method returns $.A.B.{}.C
+       /// here '{}' is the placeholder for the repeatmany loop index
         pub fn get_current_spec_path_template(&self) -> String{
             let mut spec_template = "$".to_owned();
             self.types.iter().for_each(|spec_type|{
-                spec_template = format!("{}.{}", spec_template,spec_type.to_path_template_string());
-                /* spec_template = match spec_type{
-                    SpecType::Composite(name) => format!("{}.{}", spec_template,name.to_path_string()),
-                    SpecType::RepeatMany(name,_repeat_count, _current_index) => format!("{}.{}.{{}}", spec_template,name.to_path_string()),                    
-                    SpecType::Key(name) => format!("{}.{}", spec_template,name.to_path_string()),
-                    SpecType::Value(name) => format!("{}.{}", spec_template,name.to_path_string()),
-                    SpecType::Simple(name) => format!("{}.{}", spec_template,name.to_path_string()),
-                } */
+                spec_template = format!("{}.{}", spec_template,spec_type.to_path_template_string());                
             });
             spec_template
         }
 
+        /// Get the path of current spec .e.g if ListSpec with name 'A' contains RepeatMany spec with name B and 
+       /// RepeatManySpec contains StringSpec with name 'C' and current iteration of RepeatManySpec is 5 , the method returns $.A.B.5.C
+       /// here '{}' is the placeholder for the repeatmany loop index
         pub fn get_current_spec_path(&self) -> String{
             let mut spec_path = "$".to_string();
             self.types.iter().for_each(|spec_type|{
@@ -2342,8 +2379,9 @@ pub mod core {
             spec_path
         }
 
-        pub fn get_last_available_spec_name(&self) -> Option<String>{
-            
+        /// returns the String data from last available enum SpecName::Name. 
+        /// MapperContext contains list of Spec that are traversed. this method returns the last known spec name with SpecName::Name(data)
+        pub fn get_last_available_spec_name(&self) -> Option<String>{            
             for spec_type in self.types.iter().rev(){
                 match spec_type{
                     SpecType::Composite(name) 
@@ -2373,25 +2411,27 @@ pub mod core {
         }
     }
 
+
+    /// Converts repeater template to repeater path string. e.g spec_name is A.B.{}.C returns A.B.1.C. here 1 is the current index
     fn normalize_repeater(spec_name: &String, repeater_context: &RepeaterContext,) -> String{
         normalize_repeater_with_count(spec_name, repeater_context.get_count())        
     }
 
+    /// Converts repeater template to repeater path string. e.g spec_name is A.B.{}.C returns A.B.1.C. here 1 is the current index
     fn normalize_repeater_with_count(spec_name: &String, count: u32) -> String{
         spec_name.replace("{}", count.to_string().as_str())
     }
-
+    /// Removes the `lookup_name` from the qualified name
     fn get_context_from_qualified_name(qualified_name:&str, lookup_name: &str)->String{
         qualified_name.replace(format!(".{}",  lookup_name).as_str(), "")
     }
 
+    ///Mapper trait contains method to add and retrieve information from Mapper object
     pub trait Mapper:  Send + Sync + Debug{
 
+        /// Gets the Some(value) by `spec_name`. Returns None if the `spec_name` is not recognized
         fn get_value_by_key(&self, spec_name: &str) -> Option<&Value>{
-
-            
-            let value_path = self.get_mapping_data_template().get(spec_name);
-            
+            let value_path = self.get_mapping_data_template().get(spec_name);            
             if let Some(value_path) = value_path{
                 debug!("getting value for key {} -> {}", spec_name, value_path);
                 self.get_spec_data().get(value_path)
@@ -2400,6 +2440,8 @@ pub mod core {
             }
         }
 
+        /// Gets the Some(value) by `spec_name` and key.This is used for querying information from RepeatMany key-value pairs
+        /// Spec_name could be header_name and key could be 'Content-Type' in http headers example
         fn get_value_from_key_value_list(&self,key: String, spec_name: &str) -> Option<&Value>{
             let spec_path = self.get_mapping_data_template().get(spec_name);
             
@@ -2417,40 +2459,14 @@ pub mod core {
             }
         }
 
-        fn get_key_value_map(&self, key_lookup_name: &String)-> Result<HashMap<String, &Value>, ParserError>{
-            //let context = self.get_context_from_lookup_name(&key_lookup_name);
-            //let qualified_name = self.get_mapping_data_template().get(key_lookup_name);
-            let qualified_name = self.get_qualified_name(&key_lookup_name)?;
-            let mut index = 0u32;
-            let mut values = HashMap::<String, &Value>::new();
-            loop{
-                let key_spec_name = normalize_repeater_with_count(&qualified_name, index);
-                //let value_spec_name =  self.get_mapping_data().get(&key_spec_name);
-
-                let key =  self.get_spec_data().get(&key_spec_name);
-                if key.is_none() {
-                    return Ok(values);
-                }
-
-                let key = key.unwrap();
-                    //.ok_or(ParserError::MissingData(format!("spec key data missing for {}", &key_spec_name)))?;
-                
-                let value_spec_name = self.get_mapping_data().get(&key_spec_name)
-                    .ok_or(ParserError::MissingData(format!("value spec mssing for spec key {}", &key_spec_name)))?;
-                let value = self.get_spec_data().get(value_spec_name)
-                    .ok_or(ParserError::MissingData(format!("value spec data mssing for spec key {}", &value_spec_name)))?;
-                values.insert(key.get_string_value_unchecked().unwrap(), value);
-                index+=1;
-            }
-            
-        }
-
+        /// gets the context name(string) from lookup name
         fn get_context_from_lookup_name(&self, lookup_name: &str)-> Result<String, ParserError>{
             let qualified_name = self.get_qualified_name(lookup_name)?;
             Ok(get_context_from_qualified_name(qualified_name.as_str(),  lookup_name))
             
         }
 
+        /// gets the qualified name(string) from lookup name
         fn get_qualified_name(&self, lookup_name: &str)-> Result<String, ParserError>{
             let qualified_name = self.get_mapping_data_template().get(lookup_name)
                 .ok_or(ParserError::MissingData(format!("qualified lookup name missing in spec template for {lookup_name}")))?;
@@ -2458,8 +2474,8 @@ pub mod core {
             
         }
 
-        fn add_simple_data(&mut self, key: String, value: Value) -> Result<(), ParserError>{
-            
+        /// Add data into mapper using simple key and value
+        fn add_simple_data(&mut self, key: String, value: Value) -> Result<(), ParserError>{            
             if let Some(template) = self.get_mapping_data_template().get(&key).map(|element| element.to_owned()) {
                 debug!("adding value for key {} -> {}", key, template);
                 self.get_spec_data_mut().insert(template, value);
@@ -2469,6 +2485,8 @@ pub mod core {
             } 
         }
 
+        /// Add data into mapper using key, key_lookup_name, value and value_lookup_name
+        /// In http example key could be Content-Type, key_lookup_name could be `header_name` and value_lookup_name could be 'header_value`
         fn add_to_key_value_list(&mut self, key: String, value: Value, key_lookup_name: String, value_lookup_name: String) -> Result<(), ParserError>{
             
             let key_spec_name = self.get_qualified_name(&key_lookup_name)?;
@@ -2497,63 +2515,56 @@ pub mod core {
 
             // Map key to value spec name for quick lookup of value e.g. headers.0.HeaderName.Content-Type -> headers.0.HeaderValue
             self.get_mapping_data_template_mut().insert(key_quick_lookup_name, value_spec_name);
-            
-            
-
             Ok(())
         }
 
-        
-
-
-        fn add_mapping_data(&mut self, proto_name: String, spec_name: String) {
+        /// add mapping data, proto_name to spec_name
+        /* fn add_mapping_data(&mut self, proto_name: String, spec_name: String) {
             self.get_mapping_data_mut().insert(proto_name, spec_name);
+        } */
 
-        }
-
+        /// add mapping template data, proto_name -> `protocol_version`, spec_name could be `$.request_line.protocol_version`
         fn add_mapping_template(&mut self, proto_name: String, spec_name: String) {
             debug!("adding template for name {} -> {}", proto_name, spec_name);
             self.get_mapping_data_template_mut().insert(proto_name, spec_name.clone());
         }
 
-        fn setup_mapping_data(&mut self){
-        }
-
-        
-
+        /// Gets mutable reference to  hash map containing mapping data
         fn get_mapping_data_mut(&mut self) -> &mut HashMap<String, String>;
 
+        /// Gets the mutable reference to hash map containing mapping template data
         fn get_mapping_data_template_mut(&mut self) -> &mut HashMap<String, String>;
 
+        /// Gets the shared reference to hash map containing mapping template data
         fn get_mapping_data_template(&self) -> & HashMap<String, String>;
 
+        /// Gets the shared reference to hash map containing mapping data
         fn get_mapping_data(&self) -> &HashMap<String, String>;
 
+        /// Gets the mutable reference to hash map containing spec data
         fn get_spec_data_mut(&mut self) -> &mut HashMap<String, Value>;
 
+        /// Gets the shared reference to hash map containing spec data
         fn get_spec_data(&self) -> &HashMap<String, Value>;
 
+
+        /// Gets the mutable reference to repeater context 
         fn get_repeater_context_mut(&mut self, context_name: String) -> &mut RepeaterContext{
             let context_map = self.get_repeater_context_map_mut();
             context_map.entry(context_name).or_insert(RepeaterContext::new())
         }
 
+        /// Gets the shared reference to repeater context 
         fn get_repeater_context_map_mut(&mut self) -> &mut HashMap<String, RepeaterContext>;
 
+        /// Gets the mutable reference to mapper context 
         fn get_mapper_context_mut(&mut self) -> &mut MapperContext;
 
+        /// Gets the sharede reference to mapper context 
         fn get_mapper_context(&self) -> &MapperContext;
-    }
+    }    
 
-    impl DelimitedStringSpec{
-        /* fn new(name: SpecName, delimiter: Separator,  optional: bool) -> Self {
-            DelimitedStringSpec {                
-                spec_meta_data: SpecMetaData::new(name, ValueType::String, optional),
-                until: delimiter,
-            }
-        } */
-    }
-
+    /// Parses delimited string from reader
     async fn parse_delimited_string_spec<D:DelimitedSpec>(spec: &D, reader: &mut dyn SpecRead,) -> Result<Value, ParserError>{
         let value = match spec.get_delimiter() {
                 Separator::Delimiter(ref delimiter) => {
@@ -2577,6 +2588,7 @@ pub mod core {
             }
     }
 
+    /// SpecDeserialize for DelimitedStringSpec
     #[async_trait]
     impl SpecDeserialize for DelimitedStringSpec
     {
@@ -2622,6 +2634,8 @@ pub mod core {
         }
     }
 
+    /// Spec that knows the exact string that appears in the protocol. This could be delimiter like space
+    /// or newline or one of the known values like request method in http request line
     pub struct ExactStringSpec{
         pub input: String,
         pub spec_meta_data: SpecMetaData,
@@ -2649,6 +2663,8 @@ pub mod core {
         }
     }
 
+
+    /// Spec Deserializer for exact string spec
     #[async_trait]
     impl SpecDeserialize for ExactStringSpec{
         async fn deserialize(
@@ -2675,6 +2691,7 @@ pub mod core {
         }
     }
 
+    /// SpecSerializer for exact string spec
     #[async_trait]
     impl SpecSerialize for ExactStringSpec
     {
@@ -2703,6 +2720,8 @@ pub mod core {
         }
     }
 
+
+    ///Key value spec. It is a composite spec(it contains other Spec) containing Key and Value Spec
     pub(crate) struct KeyValueSpec{
         pub spec_metadata: SpecMetaData,
         pub key: Key,
@@ -2753,16 +2772,8 @@ pub mod core {
             writer: &mut (dyn SpecWrite),            
         ) -> Result<(), ParserError>
         {
-            //mapper_context.start_spec(self);
             serialize(&self.key, info_provider, writer, mapper_context).await?;
-            //self.key.serialize(info_provider, mapper_context, writer).await?;
-
-            serialize(&self.value, info_provider, writer, mapper_context).await?;
-            //mapper_context.start_spec(self);
-            //self.value.serialize(info_provider, mapper_context, writer).await?;
-
-
-            //self.key.serialize(info_provider, writer).await?;
+            serialize(&self.value, info_provider, writer, mapper_context).await?;            
             Ok(())
         }
     }
@@ -2772,26 +2783,14 @@ pub mod core {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,
-            
-        ) -> Result<Value, ParserError>
+            reader: &mut (dyn SpecRead), update_info: bool,            
+    ) -> Result<Value, ParserError>
         {
-            
-            
             let path_finder =  |mapper:  &Box<dyn Mapper>| {mapper.get_mapper_context().get_current_spec_path()};
-            
-            
             let ( key_spec_name,  key_spec_path,) = extract_name_and_spec_path(path_finder, info_provider.get_mapper_mut(), &self.key, &self.key.0)?;
-            
-
-            let key_name = undoable_deserialize(&self.key, info_provider, reader, false).await?;
-
-            
-            let ( value_spec_name,  value_spec_path,) = extract_name_and_spec_path(path_finder,info_provider.get_mapper_mut(), &self.value, &self.value.0)?;
-            
-
+            let key_name = undoable_deserialize(&self.key, info_provider, reader, false).await?;            
+            let ( value_spec_name,  value_spec_path,) = extract_name_and_spec_path(path_finder,info_provider.get_mapper_mut(), &self.value, &self.value.0)?;           
             let value = undoable_deserialize(&self.value, info_provider, reader, false).await?;
-            
             match (key_spec_path, value_spec_path){
                 (None, None) => {},
                 (None, Some(ref value_spec_path)) => {
@@ -2811,6 +2810,7 @@ pub mod core {
         }
     }
 
+    /// Spec to represent bytes of data with fixed size. e.g request body/payload
     pub struct NBytesSpec{
         spec_meta_data: SpecMetaData,
         size: u32,
@@ -2876,7 +2876,7 @@ pub mod core {
     }
 
     
-
+    /// Spec to represent bytes of data that is available till the end of stream. e.g request body/payload
     pub struct AllBytesSpec{     
         spec_meta_data: SpecMetaData,           
     }
@@ -2931,6 +2931,7 @@ pub mod core {
         }
     }
 
+    /// Spec to represent string data that matches two or more fixed values e.g request_method in http should have values GET,POST,PUT,DELETE
     #[derive(Default)]
     pub struct OneOfSpec{
         spec_meta_data: SpecMetaData,
@@ -3034,6 +3035,7 @@ pub mod core {
         }
     }
 
+    /// Spec to represent composite spec i.e Spec containing List of constituent specs
     #[derive(Default)]
     pub struct ListSpec{            
         spec_meta_data: SpecMetaData,
@@ -3125,7 +3127,7 @@ pub mod core {
         }
     }
     
-
+    /// Spec to represent Value Spec of KeyValueSpec
     #[derive(Default)]
     pub(crate) struct ValueSpec(pub Box<dyn ProtocolSpec>, pub SpecMetaData);
 
@@ -3147,6 +3149,7 @@ pub mod core {
         }
     }
 
+    /// Spec to represent fixed key from the Spec itself and value from protocol payload
     pub(crate) struct InlineKeyWithValue(pub Box<dyn ProtocolSpec>, /* pub String, */ pub SpecMetaData);
     
     impl Spec for InlineKeyWithValue {
@@ -3155,6 +3158,8 @@ pub mod core {
         }
     }
     
+
+    /// Spec to represent key of KeyValueSpec
     #[derive(Default)]
     pub(crate) struct Key(pub Box<dyn ProtocolSpec>, pub SpecMetaData) ;
 
@@ -3262,31 +3267,25 @@ pub mod core {
             }
     }
 
+    /// Represents u64 number spec
     #[derive(Default)]
     pub struct NumberU64Spec(SpecMetaData) ;
 
+    /// Represents i64 number spec
     #[derive(Default)]
     pub struct NumberI64Spec(SpecMetaData) ;
 
+    /// Represents u32 number spec
     #[derive(Default)]
     pub struct NumberU32Spec(SpecMetaData) ;
 
+    /// Represents u16 number spec
     #[derive(Default)]
     pub struct NumberU16Spec(SpecMetaData) ;
 
     pub(crate) trait NumberSpec: SimpleValueSpec + Send + Sync{}
 
-    impl <S> ToSpecType for S where S:SimpleValueSpec{
-        /* fn to_spec_type(&self) ->SpecType {
-            let spec_name = self.get_meta_data().get_name();
-            match spec_name{
-                SpecName::Name(name) |
-                SpecName::Transient(name) =>
-                    SpecType::Simple(name.to_owned()),
-    
-                SpecName::NoName => SpecType::Simple("Default".to_owned())
-            }
-        } */
+    impl <S> ToSpecType for S where S:SimpleValueSpec{        
     }
 
     impl SimpleValueSpec for NumberU64Spec{}
@@ -3504,85 +3503,26 @@ pub mod core {
         }
     }
 
-    /*  #[async_trait]
-    impl SpecSerialize for NumberU16Spec {
+/// Module to build type safe DSL style builders required to form the protocol spec. 
+/// ``` 
+/// use protocol_spec::core::SpecName;
+/// use protocol_spec::core::builders::*;
+/// let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
+/// let spec = spec_builder
+/// .inline_value_follows(SpecName::NoName, true)
+/// .expect_string(SpecName::Name("greeting".to_string()), false).delimited_by_space()
+/// .inline_value_follows(SpecName::NoName, true)
+/// .expect_string(SpecName::Name("who".to_string()), false).delimited_by_space().build();
+/// ```
+/// 
+/// The dsl approach along with IDE suggestions guides the user to build protocol spec effortlessly
+pub mod builders{
+    use std::{marker::PhantomData, mem};
+
+    use crate::core::{DelimitedSpec, DelimitedStringSpec, ExactStringSpec, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, NumberI16Spec, NumberI64Spec, NumberU16Spec, NumberU32Spec, NumberU64Spec, OneOfSpec, ProtocolSpec, RepeatCount, RepeatManySpec, Separator, Spec, SpecMetaData, SpecName, StringSpec, ValueSpec, ValueType};
 
 
-        async fn serialize(
-            &self,
-            info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
-        ) -> Result<(), ParserError>
-        {
-            let name = self.0.get_name().to_name_string();
-            let value = info_provider.get_info(&name);
-            mapper_context.start_spec(self);
-            write_data(name, value, self.0.optional, writer).await.anyway(mapper_context)?;
-            Ok(())
-        }
-    } */
-/*
-    #[async_trait]
-    impl SpecSerialize for NumberU32Spec {
-        async fn serialize(
-            &self,
-            info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
-        ) -> Result<(), ParserError>
-        {
-            let name = self.0.get_name().to_name_string();
-            let value = info_provider.get_info(&name);
-            write_data(name, value, self.0.optional, writer).await?;
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl SpecSerialize for NumberU64Spec {
-        async fn serialize(
-            &self,
-            info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
-        ) -> Result<(), ParserError>
-        {
-            let name = self.0.get_name().to_name_string();
-            let value = info_provider.get_info(&name);
-            write_data(name, value, self.0.optional, writer).await?;
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl SpecSerialize for NumberI64Spec {
-        async fn serialize(
-            &self,
-            info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
-        ) -> Result<(), ParserError>
-        {
-            let name = self.0.get_name().to_name_string();
-            let value = info_provider.get_info(&name);
-            write_data(name, value, self.0.optional, writer).await?;
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl SpecSerialize for NumberI16Spec {
-        async fn serialize(
-            &self,
-            info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
-        ) -> Result<(), ParserError>
-        {
-            let name = self.0.get_name().to_name_string();
-            let value = info_provider.get_info(&name);
-            write_data(name, value, self.0.optional, writer).await?;
-            Ok(())
-        }
-    } */
-
-    
+    ///
     pub trait BuilderState:Default{}
 
     pub trait BuildGenericString:BuilderState{}
@@ -3690,6 +3630,7 @@ pub mod core {
         }
     }
 
+    #[allow(unused)]
     pub fn new_spec_builder(name: SpecName)-> ProtoSpecBuilderData<BuildFromScratch>{
         ProtoSpecBuilderData::<BuildFromScratch>::new_with(name, true)
     }
@@ -3969,7 +3910,7 @@ pub mod core {
         }
 
     }
-
+    
     pub trait StringSpecBuilder <IBS, OBS> :StringSpecGenerator + ProtoSpecBuilder<IBS>  
     where 
         Self: Sized + 'static,
@@ -4335,6 +4276,8 @@ pub mod core {
 
    
 
+    
+}
     pub(crate) mod protocol_reader;
     mod protocol_writer;
 }
@@ -4344,7 +4287,7 @@ mod utils;
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{
+    use crate::core::builders::{
         BuildFromScratch, DelimitedStringSpecBuilder, DelimiterBuilder, ProtoSpecBuilderData
     };
 
