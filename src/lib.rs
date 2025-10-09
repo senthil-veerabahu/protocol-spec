@@ -3,7 +3,7 @@
 //! For e.g, developer can create custom protocol for imaginary example of sending `hello world`` to server upon connection 
 //! using the below code
 //! ```
-//! use crate::common::*;
+//! use protocol_spec::common::*;
 //! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 //! let spec = spec_builder
 //! .inline_value_follows(SpecName::NoName, true)
@@ -20,7 +20,7 @@
 //! Inline Value specifies that the key is the SpecName and value is available in the protocol payload
 //! In the above example, Key is `greeting`(from spec name) and value is `hello`
 //! ```
-//! use crate::common::*;
+//! use protocol_spec::common::*;
 //! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 //! let spec = spec_builder
 //! .inline_value_follows(SpecName::NoName, true)
@@ -30,11 +30,12 @@
 //! It is also possible to specify data in other data types e.g u32.
 //! In that case, the spec becomes as below. The boolean in `inline_value_follows` and `expect_u32` specifies whether the data is optional.
 //! ```
-//! use crate::common::*;
+//! use protocol_spec::common::*;
+//! 
 //! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 //! let spec = spec_builder
 //! .inline_value_follows(SpecName::NoName, true)
-//! .expect_u32(SpecName::Name("somedata"), false);
+//! .expect_u32(SpecName::Name("somedata".to_string()), false);
 //! ```
 //! The protocol can be thought of tree of individual data items and each individual data items can be represented using the spec builder.
 //! For e.g in http request,
@@ -57,7 +58,8 @@
 //! Each header can be represented as below
 //! 
 //! ```
-//! use crate::common::*;
+//! use protocol_spec::common::*;
+//! use protocol_spec::common::SpecName::*;
 //! let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));    
 //! let header_place_holder = header_placeholder_builder
 //! .key_follows(Name("header_name".to_string()), true)
@@ -78,16 +80,30 @@
 //! http headers can be repeated many times and it ends with a extra newline character. This can be represented as below using repeat_many function
 //! 
 //! ```
-//! use crate::common::*;
+//! use protocol_spec::common::*;
+//! use protocol_spec::common::SpecName::*;
+//! let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();        
+//! let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));    
+//! let header_place_holder = header_placeholder_builder
+//! .key_follows(Name("header_name".to_string()), true)
+//! .expect_string( NoName, false)
+//! .delimited_by(": ".to_string())
+//! .value_follows(Name("header_value".to_owned()), false)
+//! .expect_string(NoName, false)
+//! .delimited_by_newline()
+//! .build();
+//! 
 //! let spec_builder = spec_builder.repeat_many(Name("headers".to_owned()), true, 
-//! Separator::Delimiter("\r\n".to_owned()),header_place_holder)
+//! Separator::Delimiter("\r\n".to_owned()),header_place_holder);
 //! ```
 //! 
 //! Entire http request can be represented as spec
 //! 
 //! 
 //! ```
-//! use crate::common::*;
+//! use protocol_spec::common::*;
+//! use protocol_spec::http::BodySpec;
+//! use protocol_spec::common::SpecName::*;
 //! pub fn build_http_request_protocol() -> ListSpec {
 //!    
 //!    let space = " ";
@@ -3529,7 +3545,7 @@ pub mod core {
 pub mod builders{
     use std::{marker::PhantomData, mem};
 
-    use crate::core::{DelimitedSpec, DelimitedStringSpec, ExactStringSpec, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, NumberI16Spec, NumberI64Spec, NumberU16Spec, NumberU32Spec, NumberU64Spec, OneOfSpec, ProtocolSpec, RepeatCount, RepeatManySpec, Separator, Spec, SpecMetaData, SpecName, StringSpec, ValueSpec, ValueType};
+    use crate::core::{DelimitedSpec, DelimitedStringSpec, ExactStringSpec, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, NumberI16Spec, NumberI64Spec, NumberSpec, NumberU16Spec, NumberU32Spec, NumberU64Spec, OneOfSpec, ProtocolSpec, RepeatCount, RepeatManySpec, Separator, Spec, SpecMetaData, SpecName, StringSpec, ValueSpec, ValueType};
 
 
     /// trait represents the current state of the builder
@@ -4240,6 +4256,24 @@ pub mod builders{
     impl  From<BuilderWrapperWithData<ProtoSpecBuilderData<BuildInlineValue>, ExactStringSpec, BuildInlineValue>>  for ProtoSpecBuilderData<BuildFromScratch>{
         
         fn from(value: BuilderWrapperWithData<ProtoSpecBuilderData<BuildInlineValue>, ExactStringSpec, BuildInlineValue>) -> Self {
+            let mut from_builder = value.0;
+            let from_state = from_builder.replace_current_state_with_default();
+            let mut result = ProtoSpecBuilderData::default();            
+            let spec = value.1;
+            let inline_key_value = InlineKeyWithValue(Box::new(spec), from_state.value_spec_metadata);
+            from_builder.add_spec(Box::new(inline_key_value));
+            result.set_state(BuildFromScratch{});
+            result.set_spec(from_builder.build());    
+            result
+            
+        }
+    }
+
+    impl <S>  From<BuilderWrapperWithData<ProtoSpecBuilderData<BuildInlineValue>, S, BuildInlineValue>>  for ProtoSpecBuilderData<BuildFromScratch>
+    where S:NumberSpec + 'static
+    {
+        
+        fn from(value: BuilderWrapperWithData<ProtoSpecBuilderData<BuildInlineValue>, S, BuildInlineValue>) -> Self {
             let mut from_builder = value.0;
             let from_state = from_builder.replace_current_state_with_default();
             let mut result = ProtoSpecBuilderData::default();            
