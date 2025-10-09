@@ -1,3 +1,4 @@
+
 ## protocol-spec
 
 This crate helps developers create protocol parsers by using a declarative, DSL-style approach.
@@ -5,7 +6,7 @@ For e.g, developer can create custom protocol for imaginary example of sending \
 using the below code
 
 ```rust
-use crate::common::*;
+use protocol_spec::common::*;
 let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 let spec = spec_builder
 .inline_value_follows(SpecName::NoName, true)
@@ -25,7 +26,7 @@ Inline Value specifies that the key is the SpecName and value is available in th
 In the above example, Key is `greeting`(from spec name) and value is `hello`
 
 ```rust
-use crate::common::*;
+use protocol_spec::common::*;
 let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 let spec = spec_builder
 .inline_value_follows(SpecName::NoName, true)
@@ -37,11 +38,11 @@ It is also possible to specify data in other data types e.g u32.
 In that case, the spec becomes as below. The boolean in `inline_value_follows` and `expect_u32` specifies whether the data is optional.
 
 ```rust
-use crate::common::*;
+use protocol_spec::common::*;
 let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();
 let spec = spec_builder
 .inline_value_follows(SpecName::NoName, true)
-.expect_u32(SpecName::Name("somedata"), false);
+.expect_u32(SpecName::Name("somedata".to_string()), false);
 ```
 
 The protocol can be thought of tree of individual data items and each individual data items can be represented using the spec builder.
@@ -64,7 +65,8 @@ Each header item can be represented as KeyValueSpec and Payload can be represent
 Each header can be represented as below
 
 ```rust
-use crate::common::*;
+use protocol_spec::common::*;
+use protocol_spec::common::SpecName::*;
 let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));    
 let header_place_holder = header_placeholder_builder
 .key_follows(Name("header_name".to_string()), true)
@@ -86,15 +88,28 @@ Key is expected to be a string and value can be number, string or bytes
 http headers can be repeated many times and it ends with a extra newline character. This can be represented as below using repeat_many function
 
 ```rust
-use crate::common::*;
+use protocol_spec::common::*;
+use protocol_spec::common::SpecName::*;
+let mut spec_builder = ProtoSpecBuilderData::<BuildFromScratch>::new();        
+let mut header_placeholder_builder = new_mandatory_spec_builder(Transient("header".to_string()));    
+let header_place_holder = header_placeholder_builder
+.key_follows(Name("header_name".to_string()), true)
+.expect_string( NoName, false)
+.delimited_by(": ".to_string())
+.value_follows(Name("header_value".to_owned()), false)
+.expect_string(NoName, false)
+.delimited_by_newline()
+.build();
 let spec_builder = spec_builder.repeat_many(Name("headers".to_owned()), true, 
-Separator::Delimiter("\r\n".to_owned()),header_place_holder)
+Separator::Delimiter("\r\n".to_owned()),header_place_holder);
 ```
 
 Entire http request can be represented as spec
 
 ```rust
-use crate::common::*;
+use protocol_spec::common::*;
+use protocol_spec::http::BodySpec;
+use protocol_spec::common::SpecName::*;
 pub fn build_http_request_protocol() -> ListSpec {
    
    let space = " ";
