@@ -1,19 +1,20 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
+use protocol_spec::core::SpecName::Transient;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::to_string;
 
 
-use crate::common::*;
+use protocol_spec::common::*;
 /* use crate::core::*;
 use crate::mapping_extractor::{traverse_spec, DefaultMapper, SpecTraverse, ToSpecType}; */
 
 
 use paste::paste;
-use std::io::Error;
-use std::str::{self, from_utf8, Utf8Error};
-use crate::core::SpecName::*;
+
+use std::str::from_utf8;
+use protocol_spec::core::SpecName::*;
 
 type Vecu8 = Vec<u8>;
 
@@ -687,25 +688,7 @@ impl InfoProvider for HttpRequestInfo {
 
 
 
-impl From<std::io::Error> for ParserError {
-    fn from(error: Error) -> Self {
-        ParserError::IOError { error }
-    }
-}
 
-
-
-impl From<Utf8Error> for ParserError {
-    fn from(error: Utf8Error) -> Self {
-        ParserError::Utf8Error( error )
-    }
-}
-
-impl From<serde_json::Error> for ParserError {
-    fn from(error: serde_json::Error) -> Self {
-        ParserError::SerdeError(  error.to_string() )
-    }
-}
 
 
 
