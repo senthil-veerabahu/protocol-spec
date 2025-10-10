@@ -107,7 +107,6 @@ Entire http request can be represented as spec
 
 ```rust
 use protocol_spec::common::*;
-use protocol_spec::http::BodySpec;
 use protocol_spec::common::SpecName::*;
 pub fn build_http_request_protocol() -> ListSpec {
    
@@ -159,9 +158,7 @@ pub fn build_http_request_protocol() -> ListSpec {
        .build();
 
    let spec_builder = spec_builder.expect_composite(request_line_placeholder)
-   .repeat_many(Name("headers".to_owned()), true, Separator::Delimiter("\r\n".to_owned()),header_place_holder)
-   
-   .use_spec(Box::new(BodySpec::new(Name("request_body".to_owned()), true)));
+   .repeat_many(Name("headers".to_owned()), true, Separator::Delimiter("\r\n".to_owned()),header_place_holder);
 
    spec_builder.build()
 }
