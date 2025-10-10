@@ -1,4 +1,3 @@
-
 ## protocol-spec
 
 This crate helps developers create protocol parsers by using a declarative, DSL-style approach.
