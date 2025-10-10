@@ -516,6 +516,26 @@ pub mod core {
         },
     }
 
+    impl From<std::io::Error> for ParserError {
+    fn from(error: std::io::Error) -> Self {
+        ParserError::IOError { error }
+    }
+}
+
+
+// Conversion to ParserError
+impl From<Utf8Error> for ParserError {
+    fn from(error: Utf8Error) -> Self {
+        ParserError::Utf8Error( error )
+    }
+}
+
+impl From<serde_json::Error> for ParserError {
+    fn from(error: serde_json::Error) -> Self {
+        ParserError::SerdeError(  error.to_string() )
+    }
+}
+
     impl ParserError{
 
         /// check if the error is EndOfStream
@@ -4369,7 +4389,6 @@ pub mod builders{
     mod protocol_writer;
 }
 
-pub mod http;
 mod utils;
 
 #[cfg(test)]
