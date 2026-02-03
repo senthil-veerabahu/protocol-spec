@@ -58,7 +58,7 @@ where
 #[async_trait]
 pub trait PlaceHolderWrite  where Self: AsyncWrite  + Unpin{
      async fn write_string(&mut self, data: String) -> Result<(), ParserError>{
-        self.write(data.as_bytes()).await?;
+        self.write_all(data.as_bytes()).await?;
         Ok(())
     }
 
@@ -103,7 +103,7 @@ pub trait PlaceHolderWrite  where Self: AsyncWrite  + Unpin{
     }
 
     async fn write_data_bytes(&mut self, data: &[u8]) -> Result<(), ParserError>{
-        self.write(data).await?;
+        self.write_all(data).await?;
         Ok(())
     }
 
@@ -310,17 +310,11 @@ mod tests {
     
     
 
-    //#![debugger_visualizer(natvis_file = "../Foo.natvis")]    
-    use std::collections::HashMap;
 
 
-    use crate::core::{
-        InfoProvider, Mapper, ParserError, Value
-    };
-    use crate::mapping_extractor::DefaultMapper;
     
 
-    pub struct TestRequestInfo(HashMap<String, Value>, Box<dyn Mapper>);
+    /* struct TestRequestInfo(HashMap<String, Value>, Box<dyn Mapper>);
 
     impl Default for TestRequestInfo{
         fn default() -> Self {
@@ -347,7 +341,7 @@ mod tests {
         fn get_mapper(&self) ->&Box<dyn Mapper> {
              &self.1
         }
-    }
+    } */
 
     
 
