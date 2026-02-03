@@ -184,10 +184,10 @@ pub mod common{
 mod mapping_extractor{
     use std::collections::HashMap;
     use tracing::debug;
-    use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, ParserError, ProtocolSpec, RepeatManySpec, RepeaterContext, SimpleValueSpec, Spec, SpecMapper, SpecType, Value, ValueSpec};
+    use crate::core::{extract_name_and_spec_path, InlineKeyWithValue, Key, KeyValueSpec, ListSpec, MappableSpec, Mapper, MapperContext, ParserError, RepeatManySpec, RepeaterContext, SimpleValueSpec, Spec, SpecMapper, SpecType, Value, ValueSpec};
 
     pub trait SpecTraverse{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError>;
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError>;
     }
 
     #[derive(Clone, Default, Debug)]
@@ -295,70 +295,70 @@ mod mapping_extractor{
     }
 
     impl  SpecTraverse for Key{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl <S> SpecTraverse for S where S:SimpleValueSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>)  -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper)  -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl  SpecTraverse for ValueSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl  SpecTraverse for KeyValueSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl SpecTraverse for RepeatManySpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl SpecTraverse for InlineKeyWithValue{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     //TODO change the return value to Result instead of unit
-    pub fn traverse_spec<S>(spec: &S, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> where S:MappableSpec + ?Sized{
+    pub fn traverse_spec<S>(spec: &S, mapper: &mut dyn Mapper) -> Result<(), ParserError> where S:MappableSpec + ?Sized{
         mapper.get_mapper_context_mut().start_spec_type(spec.to_spec_type());    
         spec.add_mapping_template(mapper)?;
-        return mapper.get_mapper_context_mut().end_spec(spec);
+        mapper.get_mapper_context_mut().end_spec(spec)
         
     }
 
     impl SpecTraverse for ListSpec{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             traverse_spec(self, mapper)
         }
     }
 
     impl SpecMapper for InlineKeyWithValue{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>)->Result<(), ParserError>  {
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper)->Result<(), ParserError>  {
             self.0.traverse(mapper)
         }
     }
    
     impl SpecMapper for RepeatManySpec{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError>  {
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper) ->Result<(), ParserError>  {
             self.constituents.traverse(mapper)
         }
     }
 
     
     impl <T> SpecMapper for T where T:SimpleValueSpec{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>)->Result<(), ParserError>  {
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper)->Result<(), ParserError>  {
             debug!("delimited string spec {}", self.get_meta_data().get_name().to_string());
 
             if let Some(key_name) = mapper.get_mapper_context().get_last_available_spec_name() {
@@ -370,47 +370,38 @@ mod mapping_extractor{
     }
 
     impl SpecMapper for ValueSpec{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             self.0.traverse(mapper)
         }
     }
 
     impl SpecMapper for KeyValueSpec{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError> {
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper) ->Result<(), ParserError> {
 
             debug!("keyvalue name {}, key name {}, inner keyspec name {}", self.get_meta_data().get_name(), self.key.get_meta_data().get_name(), self.key.0.get_meta_data().get_name());
-            let path_finder =  |mapper:  &Box<dyn Mapper>| {
+            let path_finder =  |mapper:  &dyn Mapper| {
                 mapper.get_mapper_context().get_current_spec_path_template()
             };
             //mapper.get_mapper_context_mut().start_spec(&self.key);
             let ( key_name,  key_spec_path,) = extract_name_and_spec_path(path_finder, mapper, &self.key, &self.key.0)?;
-            match (&key_name, &key_spec_path){                
-                (Some(name), Some(path)) => {
-                    mapper.add_mapping_template(name.clone(), path.clone());
-                }
-                (_,_) =>{}
+            if let (Some(name), Some(path)) = (&key_name, &key_spec_path) {
+                mapper.add_mapping_template(name.clone(), path.clone());
             }
 
             let ( value_name, value_spec_path,) = extract_name_and_spec_path(path_finder, mapper,&self.value, &self.value.0)?;
-            match ( &value_name,  &value_spec_path){                
-                (Some(name), Some(path)) => {
-                    mapper.add_mapping_template(name.clone(), path.clone());
-                }
-                (_,_) =>{}
+            if let (Some(name), Some(path)) = ( &value_name,  &value_spec_path) {
+                mapper.add_mapping_template(name.clone(), path.clone());
             }
 
-            match (&key_spec_path, &value_spec_path){        
-            (Some(key_path), Some(value_path)) => {
+            if let (Some(key_path), Some(value_path)) = (&key_spec_path, &value_spec_path) {
                 mapper.add_mapping_template(key_path.clone(), value_path.clone());
-            }
-            (_,_) =>{}
             }
             Ok(())
         }
     }
 
     impl SpecMapper for Key{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError>  {
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper) ->Result<(), ParserError>  {
             self.0.traverse(mapper)
         }   
     }
@@ -418,14 +409,12 @@ mod mapping_extractor{
     
 
     impl SpecMapper for ListSpec{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError> {
-            return self.constituents
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper) ->Result<(), ParserError> {
+            self.constituents
             .iter()
-            .fold(Ok(()), |result: Result<(), ParserError>, element: &Box<dyn ProtocolSpec>|
-             result.and_then(|_| {
+            .try_fold((), |_, element| {
                 element.traverse(mapper)
-            }));
-            
+            })
         }
     }
 }
@@ -442,7 +431,7 @@ pub mod core {
     use protocol_reader::ProtocolBuffReader;
     use protocol_reader::{ MarkAndRead};
 
-    use protocol_writer::ProtocolBuffWriter;
+    use protocol_writer::ProtocolBuffWriter;    
     use tracing::{debug, info, warn};
     
     
@@ -537,10 +526,7 @@ impl From<serde_json::Error> for ParserError {
 
         /// check if the error is EndOfStream
         fn is_eof(&self) -> bool{
-            match self{
-                ParserError::EndOfStream => true,
-                _ => false,
-            }
+            matches!(self, ParserError::EndOfStream)
         }
     }
 
@@ -598,7 +584,6 @@ impl From<serde_json::Error> for ParserError {
     }
 
     #[allow(unused)]
-
     ///Extractor to retrieve underlying data from Value
     pub trait ValueExtractor<'a> {
 
@@ -645,9 +630,9 @@ impl From<serde_json::Error> for ParserError {
         fn get_u8_vec(&self) -> Option<&Vec<u8>>;
     }
 
-    impl<'a> ValueExtractor<'a> for Value {
+    impl ValueExtractor<'_> for Value {
         fn get_string_value(&self) -> Option<String> {
-            return match &self {
+            match &self {
                 Value::String(ref data) => Some(data.clone()),
                 Value::UnSignedNumber16(ref data) => Some(data.to_string()),
                 Value::UnSignedNumber32(ref data) => Some(data.to_string()),
@@ -656,70 +641,69 @@ impl From<serde_json::Error> for ParserError {
                 Value::SignedNumber64(ref data) => Some(data.to_string()),
 
                 _ => {
-                    return None;
+                    None
                 }
-            };
+            }
         }
 
         fn get_signed_num_64_value(&self) -> Option<i64> {
-            return match self {
+            match self {
                 Value::SignedNumber64(data) => Some(*data),
 
                 _ => {
-                    return None;
+                    None
                 }
-            };
+            }
         }
 
         fn get_unsigned_num_64_value(&self) -> Option<u64> {
-            return match self {
+            match self {
                 Value::UnSignedNumber64(data) => Some(*data),
 
                 _ => {
-                    return None;
+                    None
                 }
-            };
+            }
         }
 
         fn get_unsigned_num_32_value(&self) -> Option<u32> {
-            return match self {
+            match self {
                 Value::UnSignedNumber32(data) => Some(*data),
                 Value::String(data) => Some(data.parse::<u32>().unwrap()),
 
                 _ => {
-                    return None;
+                    None
                 }
-            };
+            }
         }
 
         fn get_signed_num_16_value(&self) -> Option<i16> {
-            return match self {
+            match self {
                 Value::SignedNumber16(data) => Some(*data),
 
                 _ => {
-                    return None;
+                    None
                 }
-            };
+            }
         }
 
         fn get_unsigned_num_16_value(&self) -> Option<u16> {
-            return match self {
+            match self {
                 Value::UnSignedNumber16(data) => Some(*data),
-
                 _ => {
-                    return None;
+                    None
                 }
-            };
+            }
         }
 
         fn get_u8_vec(&self) -> Option<&Vec<u8>> {
-            return match self {
+            match self {
                 Value::U8Vec(data) => Some(data),
 
                 _ => {
-                    return None;
+                    None
                 }
-            };
+            }
         }
         
         fn get_string_value_unchecked(&self) -> Result<String, ParserError> {
@@ -844,7 +828,7 @@ impl From<serde_json::Error> for ParserError {
     async fn write<W: AsyncWrite + Unpin>(value: &Value, mut writer: W) -> Result<(), ParserError> {
         match value {
             Value::String(s) => {
-                            writer.write(s.as_bytes()).await?;
+                            writer.write_all(s.as_bytes()).await?;
                         }
             Value::SignedNumber64(num) => {
                             writer.write_i64(*num).await?;
@@ -876,7 +860,7 @@ impl From<serde_json::Error> for ParserError {
         async fn write<W: AsyncWrite + Unpin>(& self, mut writer: W) -> Result<(), ParserError> {
             match self {
                 Value::String(s) => {
-                                            writer.write(s.as_bytes()).await?;
+                                            writer.write_all(s.as_bytes()).await?;
                                         }
                 Value::SignedNumber64(num) => {
                                             writer.write_i64(*num).await?;
@@ -907,12 +891,12 @@ impl From<serde_json::Error> for ParserError {
     pub trait InfoProvider:  Send + Sync{
 
         /// Gets the data using key as lookup        
-        fn get_info(&self, key: &String) -> Option<&Value>{
+        fn get_info(&self, key: &str) -> Option<&Value>{
             self.get_mapper().get_value_by_key(key)
         }
 
         /// Gets the data using spec path as lookup        
-        fn get_info_by_spec_path(&self, spec_path: &String) -> Option<&Value>{
+        fn get_info_by_spec_path(&self, spec_path: &str) -> Option<&Value>{
             self.get_mapper().get_spec_data().get(spec_path)
         }
 
@@ -924,12 +908,12 @@ impl From<serde_json::Error> for ParserError {
                 let full_path = format!("{}.{}", path, key);
                 let value_path = self.get_mapper().get_mapping_data_template().get(&full_path);
                 if let Some(value_path) = value_path{
-                    return self.get_mapper().get_spec_data().get(value_path);
+                    self.get_mapper().get_spec_data().get(value_path)
                 }else {
-                    return None;
+                    None
                 }
             }else{
-                return None;
+                None
             }
             
         }
@@ -952,7 +936,7 @@ impl From<serde_json::Error> for ParserError {
         /// key_spec_name -> header_name
         /// value_spec_name -> header_value
         fn add_info_by_spec_path(&mut self, key: String, key_spec_name: String, value: Value , value_spec_name: String) {
-            self.get_mapper_mut().add_to_key_value_list(key, value, key_spec_name, value_spec_name);
+            let _ = self.get_mapper_mut().add_to_key_value_list(key, value, key_spec_name, value_spec_name);
         }
 
         //fn add_transient_info(&mut self, key: String, value: Value);
@@ -960,10 +944,10 @@ impl From<serde_json::Error> for ParserError {
         //fn has_all_data(&self) -> bool;
 
         /// Gets mutable mapper reference
-        fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper>;
+        fn get_mapper_mut(&mut self) ->&mut dyn Mapper;
 
         /// Gets shared mutable mapper reference
-        fn get_mapper(&self) ->&Box<dyn Mapper>;
+        fn get_mapper(&self) ->&dyn Mapper;
 
         /// Gets mapper context        
         fn get_mapper_context(&mut self) ->&mut MapperContext{
@@ -984,12 +968,12 @@ impl From<serde_json::Error> for ParserError {
         }
 
         fn get_count(&self) -> u32{
-            return self.count;
+            self.count
         }
 
         fn next(&mut self) -> u32{
             self.count+=1;
-            return self.count;
+            self.count
         }
     }
 
@@ -1017,7 +1001,7 @@ impl From<serde_json::Error> for ParserError {
         RESI: ResponseInfo,
     {
         ///Gets the request specification
-        fn get_request_spec(&self) -> &Box<dyn ProtocolSpec>;
+        fn get_request_spec(&self) -> &dyn ProtocolSpec;
 
         ///Creates request info object
         fn create_request_info(&self) -> REQI;        
@@ -1042,7 +1026,7 @@ impl From<serde_json::Error> for ParserError {
         RESERRH: ResponseErrorHandler<RESI>,
     {
         ///Gets response spec created using the spec builder
-        fn get_response_spec(&self) -> &Box<dyn ProtocolSpec>;
+        fn get_response_spec(&self) -> &dyn ProtocolSpec;
 
         /// Creates ResponseInfo object
         fn create_response_info(&self) -> Result<RESI, ParserError>;
@@ -1159,7 +1143,7 @@ impl From<serde_json::Error> for ParserError {
             &self,
             res: RSI,
             writer: W,
-            spec: &Box<dyn ProtocolSpec>,
+            spec: &dyn ProtocolSpec,
         ) -> Result<(), ParserError>
         where W: AsyncWrite + Unpin + Send + Sync;
 
@@ -1224,7 +1208,7 @@ impl From<serde_json::Error> for ParserError {
             &self,
             response_info: RESI,
             writer: W,
-            spec: &Box<dyn ProtocolSpec>,
+            spec: &dyn ProtocolSpec,
         ) -> Result<(), ParserError> where W: AsyncWrite + Unpin + Send + Sync {
             let mut protocol_writer = ProtocolBuffWriter::new(writer);
             let mut mapper_context= MapperContext::new();
@@ -1375,10 +1359,10 @@ impl From<serde_json::Error> for ParserError {
         /// New method (constructor). The wrapped request spec is traversed first before Creating new MapperAware RequestFactory
         fn new(inner: T::REQF) -> Self{
             
-            let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
-            let result = inner.get_request_spec().traverse(&mut mapper);
-            if result.is_err(){
-                panic!("unexpected error while parsing request spec {}", result.unwrap_err());
+            let mut mapper = Box::new(DefaultMapper::new());
+            let result = inner.get_request_spec().traverse(&mut *mapper);
+            if let Err(err) = result{
+                panic!("unexpected error while parsing request spec {}", err);
             }
             Self { inner, mapper }
         }
@@ -1388,7 +1372,7 @@ impl From<serde_json::Error> for ParserError {
     impl <T> RequestFactory<T::REQI, T::REQSER, T::REQH, T::REQERRH, T::RESI> for MapperAwareRequestFactory<T> where T: ProtocolConfig{
 
         /// returns the requst spec from wrapped MapperAwareRequestFactory
-        fn get_request_spec(&self) -> &Box<dyn ProtocolSpec> {
+        fn get_request_spec(&self) -> &dyn ProtocolSpec {
             self.inner.get_request_spec()
         }
     
@@ -1424,9 +1408,9 @@ impl From<serde_json::Error> for ParserError {
         fn new(inner: T::RESF) -> Self{
             
             let mut mapper: Box<dyn Mapper> = Box::new(DefaultMapper::new());
-            let result = inner.get_response_spec().traverse(&mut mapper);
-            if result.is_err(){
-                panic!("unexpected error while parsing response spec {}", result.unwrap_err());
+            let result = inner.get_response_spec().traverse(&mut *mapper);
+            if let Err(err) = result {
+                panic!("unexpected error while parsing response spec {}", err);
             }
             Self { inner, mapper }
         }
@@ -1435,7 +1419,7 @@ impl From<serde_json::Error> for ParserError {
     impl <T> ResponseFactory<T::RESI, T::RESSER, T::RESH, T::RESERRH, > for MapperAwareResponseFactory<T> where T: ProtocolConfig{
 
         /// Delegates to inner factory
-        fn get_response_spec(&self) -> &Box<dyn ProtocolSpec> {
+        fn get_response_spec(&self) -> &dyn ProtocolSpec {
             self.inner.get_response_spec()
         }
     
@@ -1530,8 +1514,8 @@ impl From<serde_json::Error> for ParserError {
 
                     let _handle = tokio::spawn(async move {
                         let result = self.handle_connection(socket).await;
-                        if result.is_err(){
-                            warn!("error handing request from addr {}, {}", addr.ip(), result.unwrap_err());
+                        if let Err(err) = result {
+                            warn!("error handing request from addr {}, {}", addr.ip(), err);
                         }
                     });
                 }
@@ -1557,7 +1541,7 @@ impl From<serde_json::Error> for ParserError {
                 .await?; 
             let result = CFG::REQH::handle_request(
                 &self.request_factory.create_request_handler(),
-                &request_info,
+                request_info,
                 &mut res_info
             ).await;
             match result {
@@ -1574,7 +1558,7 @@ impl From<serde_json::Error> for ParserError {
                 }
                 Err(e) => {
                     warn!("Error handling request: {:?}", e);
-                    return Err(e);
+                    Err(e)
                 }
             } 
         }
@@ -1632,7 +1616,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize (
             &self,
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead), update_info: bool,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError>;
     }
 
@@ -1659,7 +1643,7 @@ impl From<serde_json::Error> for ParserError {
 
     /// serializes tje spec `spec` into the `writer` based on data in `info_provider`
     async fn serialize<S>(spec: &S, info_provider: & ( dyn InfoProvider + Send + Sync ), 
-        writer: &mut (dyn SpecWrite), 
+        writer: &mut dyn SpecWrite, 
         mapper_context: &mut MapperContext) -> Result<(), ParserError>
         where S: ProtocolSpec + ?Sized{
             //SpecDeserialize
@@ -1672,19 +1656,17 @@ impl From<serde_json::Error> for ParserError {
     /// SpecSerialize implementation of SpecSerializer.  current spec is added to mapper_context before serialization
     /// and is removed from mapper context after the spec is serialized
     #[async_trait]
-    impl<'a, S> SpecSerialize for SpecSerializer<'a, S> where S:ProtocolSpec + ?Sized{
+    impl<S> SpecSerialize for SpecSerializer<'_, S> where S:ProtocolSpec + ?Sized{
 
         async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>{
             mapper_context.start_spec(self.inner);
             let result = self.inner.serialize(info_provider, mapper_context, writer).await;
             let end_spec_result = mapper_context.end_spec(self.inner);
-            if result.is_err(){
-                return result;
-            }
+            let _ = result?;
             return end_spec_result;
         }
     }
@@ -1692,11 +1674,11 @@ impl From<serde_json::Error> for ParserError {
     /// SpecSerialize implementation of SpecSerializer.  current spec is added to mapper_context before deserialization
     /// and is removed from mapper context after the spec is deserialized
     #[async_trait]
-    impl <'a, S> SpecDeserialize for SpecDeserializer<'a, S> where S:SerializableSpec{
+    impl<S> SpecDeserialize for SpecDeserializer<'_, S> where S:SerializableSpec{
         async fn deserialize (
             &self,
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead), update_info: bool,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError>{            
             begin(self.inner, info_provider.get_mapper_mut().get_mapper_context_mut());
             let value_result = self.inner.deserialize(info_provider, reader, update_info).await;
@@ -1766,7 +1748,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>;
         
     }
@@ -1793,10 +1775,10 @@ impl From<serde_json::Error> for ParserError {
     impl Display for SpecName{
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self{
-                SpecName::NoName => write!(f, "{}", "noName"),
+                SpecName::NoName => write!(f, "noName"),
                 SpecName::Name(name) => write!(f, "{}", name),
                 SpecName::Transient(name) =>  write!(f, "transient {}", name),
-                SpecName::Delimiter =>  write!(f, "{}", "delimiter"),
+                SpecName::Delimiter =>  write!(f, "delimiter"),
             }
         }
     }
@@ -1814,10 +1796,7 @@ impl From<serde_json::Error> for ParserError {
         }
 
         fn is_delimiter(&self) -> bool{
-            match self{
-                SpecName::Delimiter => true,
-                _ => false
-            }
+            matches!(self, SpecName::Delimiter)
         }
     }
  
@@ -1828,7 +1807,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize (
             &self,
             info_provider: &( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>{
             let result = serialize(&self.0, info_provider, writer, mapper_context).await;
             if !self.1.optional & result.is_err(){
@@ -1846,7 +1825,7 @@ impl From<serde_json::Error> for ParserError {
 
     /// The function peek ahead into the reader and tries to perform deserialization.
     ///  The reader is reset to last known state after deserialization
-    async fn peek_ahead_and_deserialize<S>(spec: &S,  info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead), update_info: bool,) -> Result<Value, ParserError>
+    async fn peek_ahead_and_deserialize<S>(spec: &S,  info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut dyn SpecRead, update_info: bool,) -> Result<Value, ParserError>
         where S: SerializableSpec {           
 
             let marker = reader.mark();
@@ -1854,18 +1833,18 @@ impl From<serde_json::Error> for ParserError {
             match result {
                 Ok(value_type) => {
                     reader.reset(&marker)?;
-                    return Ok(value_type);                    
+                    Ok(value_type)
                 }
                 Err(e) => {
                     reader.reset(&marker)?;
-                    return Err(e);
+                    Err(e)
                 }
             }        
     }
         
     
     /// Performs deserialization that can be undone incase of error
-    async fn undoable_deserialize<S>(spec: &S, info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut (dyn SpecRead), update_info: bool,) -> Result<Value, ParserError>
+    async fn undoable_deserialize<S>(spec: &S, info_provider: &mut ( dyn InfoProvider + Send + Sync ), reader: &mut dyn SpecRead, update_info: bool,) -> Result<Value, ParserError>
         where S: SerializableSpec {
             //SpecDeserialize
         let serialier = SpecDeserializer{
@@ -1880,11 +1859,11 @@ impl From<serde_json::Error> for ParserError {
 
     /// SpecDeserialize implementation for undiable deserializer type
     #[async_trait]
-    impl <'a, T> SpecDeserialize for UndoableDeserializer<'a, T> where T:SerializableSpec{        
+    impl <T> SpecDeserialize for UndoableDeserializer<'_, T> where T:SerializableSpec{        
         async fn deserialize (
             &self,  
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead), update_info: bool,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError>{
             let marker = reader.mark();
             let result = self.inner.deserialize(info_provider, reader,update_info).await;            
@@ -1917,7 +1896,7 @@ impl From<serde_json::Error> for ParserError {
     }
 
     /// Enum for different types of separator.
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Debug, Clone, PartialEq, Default)]
     pub enum Separator{
         /// String separator
         Delimiter(String),
@@ -1926,14 +1905,9 @@ impl From<serde_json::Error> for ParserError {
         NBytes(u32),
 
         ///End of stream as separator
+        #[default]
         EndOfStream,
     }
-
-    impl Default for Separator {
-        fn default() -> Self {
-            Separator::EndOfStream
-        }
-    }   
 
 
     /// type to store metadata of spec. Metadata contains name of spec(SpecName), data type of value represented by spec
@@ -2051,7 +2025,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize (
             &self,
             _info_provider: & ( dyn InfoProvider + Send + Sync ), _mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>{
             match self {
                 
@@ -2059,11 +2033,11 @@ impl From<serde_json::Error> for ParserError {
                     match separator{
                         Separator::Delimiter(delimiter) => {
                             writer.write_string(delimiter.to_owned()).await?;
-                            return Ok(());
+                            Ok(())
                         },
                         Separator::NBytes(num) => {
                             writer.write_data_u32(*num).await?;
-                            return Ok(());
+                            Ok(())
                         },
                         Separator::EndOfStream => {
                             Ok(())
@@ -2138,9 +2112,7 @@ impl From<serde_json::Error> for ParserError {
                                 if delimiter_result.is_ok(){
                                     break;
                                 }else{
-                                    if result.is_err() {
-                                        return result;
-                                    }
+                                    let _ = result?;
                                 }
                             },
 
@@ -2148,8 +2120,7 @@ impl From<serde_json::Error> for ParserError {
                                 // check if next few bytes matches the number
                                 let spec: Box<dyn ProtocolSpec> = Box::new(NumberU32Spec(SpecMetaData::new(SpecName::Delimiter, ValueType::UnSignedNumber32, false)));
                                 let number_read_result = undoable_deserialize(&spec, info_provider, reader, false).await;
-                                if number_read_result.is_ok() {
-                                    let value =  number_read_result.unwrap();
+                                if let Ok(value) = number_read_result {
                                     if value.get_unsigned_num_32_value().unwrap() == *n {
                                         break;
                                     }
@@ -2165,9 +2136,11 @@ impl From<serde_json::Error> for ParserError {
                                 // check if end of stream is reached
                                 let peek_result = peek_ahead_and_deserialize(
                                     &spec, info_provider, reader, update_info).await;
-                                if peek_result.is_err(){
-                                    //check for end of stream
-                                    if peek_result.unwrap_err().is_eof(){
+
+
+                                //check for end of stream
+                                if let Err(err) = peek_result {
+                                    if err.is_eof(){
                                         break;
                                     }
                                 }else if result.is_err(){
@@ -2193,14 +2166,14 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>
         {                        
             let mut has_one_success = false;
             loop{
                 
                 let result = serialize(&self.constituents, info_provider, writer, mapper_context).await;
-                has_one_success = has_one_success | result.is_ok();
+                has_one_success |= result.is_ok();
                 if result.is_ok(){                    
                     mapper_context.increment_current_repeat_spec();
                     continue;
@@ -2210,7 +2183,6 @@ impl From<serde_json::Error> for ParserError {
                     self.repeat_count.serialize(info_provider, mapper_context, writer).await?;
                     return result;
                 }else if !has_one_success && self.get_meta_data().is_optional(){
-                    //mapper_context.end_spec(self)?;
                     self.repeat_count.serialize(info_provider, mapper_context, writer).await?;
                     return Ok(());
                 }else if has_one_success {
@@ -2240,12 +2212,12 @@ impl From<serde_json::Error> for ParserError {
     /// SpecMapper for leaf spec (e.g SimpleValueSpec) simply adds the metadata to mapper. Composite Specs(e.g RepeatManySpec, ListSpec)
     /// traverses its consituent until it reaches its leaf node.
     pub trait SpecMapper{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError>;
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError>;
     }
 
     /// SpecMapper for Box of protocol spec
     impl SpecMapper for Box<dyn ProtocolSpec>{
-        fn add_mapping_template(&self, mapper: &mut Box<dyn Mapper>) ->Result<(), ParserError>  {
+        fn add_mapping_template(&self, mapper: &mut dyn Mapper) ->Result<(), ParserError>  {
             (**self).add_mapping_template(mapper)?;
             Ok(())
         }
@@ -2260,7 +2232,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>{
             (**self).serialize(info_provider, mapper_context, writer).await
         }
@@ -2272,7 +2244,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize (
             &self,
             info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-            reader: &mut (dyn SpecRead), update_info: bool,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError>{
             (**self).deserialize(info_provider, reader, update_info).await
         }
@@ -2287,7 +2259,7 @@ impl From<serde_json::Error> for ParserError {
 
     /// SpecTraverse implementation for box that forwards to underlying trait object
     impl SpecTraverse for Box<dyn ProtocolSpec>{
-        fn traverse(&self, mapper: &mut Box<dyn Mapper>) -> Result<(), ParserError> {
+        fn traverse(&self, mapper: &mut dyn Mapper) -> Result<(), ParserError> {
             (**self).traverse(mapper)
         }
     }
@@ -2389,14 +2361,8 @@ impl From<serde_json::Error> for ParserError {
         /// Increments the repeat index in the last known repeatspec
         pub fn increment_current_repeat_spec(&mut self){
             let last = self.types.last_mut();
-            if let Some( repeater) = last{
-                match repeater{
-                    
-                    SpecType::RepeatMany(_, _repeat_count, current_index) => {
-                        *current_index += 1;
-                    },
-                    _ =>{}
-                }
+            if let Some( SpecType::RepeatMany(_, _repeat_count, current_index)) = last{                
+                *current_index += 1;
             }
         }
 
@@ -2456,12 +2422,12 @@ impl From<serde_json::Error> for ParserError {
 
 
     /// Converts repeater template to repeater path string. e.g spec_name is A.B.{}.C returns A.B.1.C. here 1 is the current index
-    fn normalize_repeater(spec_name: &String, repeater_context: &RepeaterContext,) -> String{
+    fn normalize_repeater(spec_name: &str, repeater_context: &RepeaterContext,) -> String{
         normalize_repeater_with_count(spec_name, repeater_context.get_count())        
     }
 
     /// Converts repeater template to repeater path string. e.g spec_name is A.B.{}.C returns A.B.1.C. here 1 is the current index
-    fn normalize_repeater_with_count(spec_name: &String, count: u32) -> String{
+    fn normalize_repeater_with_count(spec_name: &str, count: u32) -> String{
         spec_name.replace("{}", count.to_string().as_str())
     }
     /// Removes the `lookup_name` from the qualified name
@@ -2495,7 +2461,7 @@ impl From<serde_json::Error> for ParserError {
                 if let Some(value_path) = value_path{
                     self.get_spec_data().get(value_path)
                 }else{
-                    return None;
+                    None
                 }
             }else{
                 None
@@ -2522,9 +2488,9 @@ impl From<serde_json::Error> for ParserError {
             if let Some(template) = self.get_mapping_data_template().get(&key).map(|element| element.to_owned()) {
                 debug!("adding value for key {} -> {}", key, template);
                 self.get_spec_data_mut().insert(template, value);
-                return Ok(())
+                Ok(())
             }else{
-                return Err(ParserError::MissingKey(format!("template lookup failed for key {}", key)));
+                Err(ParserError::MissingKey(format!("template lookup failed for key {}", key)))
             } 
         }
 
@@ -2560,11 +2526,6 @@ impl From<serde_json::Error> for ParserError {
             self.get_mapping_data_template_mut().insert(key_quick_lookup_name, value_spec_name);
             Ok(())
         }
-
-        /// add mapping data, proto_name to spec_name
-        /* fn add_mapping_data(&mut self, proto_name: String, spec_name: String) {
-            self.get_mapping_data_mut().insert(proto_name, spec_name);
-        } */
 
         /// add mapping template data, proto_name -> `protocol_version`, spec_name could be `$.request_line.protocol_version`
         fn add_mapping_template(&mut self, proto_name: String, spec_name: String) {
@@ -2622,7 +2583,7 @@ impl From<serde_json::Error> for ParserError {
             };
 
             if let Some(value) = value {
-                return Ok(ValueType::parse(&spec.get_meta_data().value_type, &value));
+                Ok(ValueType::parse(&spec.get_meta_data().value_type, &value))
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read value for placeholder: {:?}",
@@ -2659,7 +2620,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>
         {
             //mapper_context.start_spec(self);
@@ -2667,7 +2628,7 @@ impl From<serde_json::Error> for ParserError {
             let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());
             write_data(name.to_name_string(), value, self.get_meta_data().is_optional(), writer).await?;
             if let Separator::Delimiter(delimiter) = &self.until{
-                writer.write(delimiter.as_bytes()).await?;
+                writer.write_all(delimiter.as_bytes()).await?;
             }
 
             if let Separator::NBytes(delimiter) = &self.until{
@@ -2741,7 +2702,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),
+            writer: &mut dyn SpecWrite,
         ) -> Result<(), ParserError>
         {   
             //mapper_context.start_spec(self);
@@ -2783,8 +2744,8 @@ impl From<serde_json::Error> for ParserError {
 
     pub(crate) fn extract_name_and_spec_path<F, S> (
         spec_path_finder: F,
-        mapper: &mut Box<dyn Mapper>, spec: &S, inner_spec: &Box<dyn ProtocolSpec> ) -> Result<(Option<String>, Option<String>), ParserError>
-        where F: Fn(&Box<dyn Mapper>) -> String,
+        mapper: &mut dyn Mapper, spec: &S, inner_spec: &dyn ProtocolSpec ) -> Result<(Option<String>, Option<String>), ParserError>
+        where F: Fn(&dyn Mapper) -> String,
         S: ProtocolSpec,
         {
         mapper.get_mapper_context_mut().start_spec_type(spec.to_spec_type());
@@ -2795,7 +2756,7 @@ impl From<serde_json::Error> for ParserError {
             );
         mapper.get_mapper_context_mut().end_spec(inner_spec)?;
         mapper.get_mapper_context_mut().end_spec(spec)?;
-        return Ok((spec_name, spec_path))
+        Ok((spec_name, spec_path))
     }
 
 
@@ -2812,7 +2773,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             serialize(&self.key, info_provider, writer, mapper_context).await?;
@@ -2826,10 +2787,10 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,            
+            reader: &mut dyn SpecRead, update_info: bool,            
     ) -> Result<Value, ParserError>
         {
-            let path_finder =  |mapper:  &Box<dyn Mapper>| {mapper.get_mapper_context().get_current_spec_path()};
+            let path_finder =  |mapper:  &dyn Mapper| {mapper.get_mapper_context().get_current_spec_path()};
             let ( key_spec_name,  key_spec_path,) = extract_name_and_spec_path(path_finder, info_provider.get_mapper_mut(), &self.key, &self.key.0)?;
             let key_name = undoable_deserialize(&self.key, info_provider, reader, false).await?;            
             let ( value_spec_name,  value_spec_path,) = extract_name_and_spec_path(path_finder,info_provider.get_mapper_mut(), &self.value, &self.value.0)?;           
@@ -2881,7 +2842,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError>
         {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(self.size)).await?;
@@ -2906,7 +2867,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             
@@ -2937,7 +2898,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,   
+            reader: &mut dyn SpecRead, update_info: bool,   
         ) -> Result<Value, ParserError>
         {
             let bytes = reader.read_bytes(ReadBytesSize::Full).await?;
@@ -2948,7 +2909,7 @@ impl From<serde_json::Error> for ParserError {
                     }
                     return Ok(Value::None)
                 }
-                return Ok(ValueType::parse(&self.get_meta_data().get_value_type(), &bytes));
+                return Ok(ValueType::parse(self.get_meta_data().get_value_type(), &bytes));
             } else {
                 Err(ParserError::MissingValue(format!(
                     "Unable to read {} bytes for placeholder: {:?}",
@@ -2963,7 +2924,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             let name = self.get_meta_data().get_name().to_name_string();                        
@@ -3027,7 +2988,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError>
         {
             let result = parse_delimited_string_spec(self, reader).await?;
@@ -3064,7 +3025,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             let name = self.get_meta_data().get_name().to_name_string();                        
@@ -3072,7 +3033,7 @@ impl From<serde_json::Error> for ParserError {
             let value = info_provider.get_info_by_spec_path(&mapper_context.get_current_spec_path());
             write_data(name, value, self.get_meta_data().is_optional(), writer).await?;
             if let Separator::Delimiter(delimiter) = &self.until{
-                writer.write(delimiter.as_bytes()).await?;
+                writer.write_all(delimiter.as_bytes()).await?;
             }
             Ok(())
         }
@@ -3082,7 +3043,7 @@ impl From<serde_json::Error> for ParserError {
     #[derive(Default)]
     pub struct ListSpec{            
         spec_meta_data: SpecMetaData,
-        pub constituents: Vec<Box< (dyn ProtocolSpec)>>,
+        pub constituents: Vec<Box<dyn ProtocolSpec>>,
     }
 
     
@@ -3092,7 +3053,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,            
+            reader: &mut dyn SpecRead, update_info: bool,            
         ) -> Result<Value, ParserError>
         {
             let mut has_one_success = false;
@@ -3106,7 +3067,7 @@ impl From<serde_json::Error> for ParserError {
                     },
                     Err(ref e) => {
                         debug!("{} is optional? {}, {}", constituent.get_meta_data().get_name(), constituent.get_meta_data().is_optional(),e);
-                        has_one_success = has_one_success | false;
+                        has_one_success |= false;
                         if constituent.get_meta_data().is_optional() {
                             continue;
                         }else{
@@ -3128,7 +3089,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             //mapper_context.start_spec(self);
@@ -3219,7 +3180,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             //mapper_context.start_spec(self);
@@ -3245,7 +3206,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,         
+            reader: &mut dyn SpecRead, update_info: bool,         
         ) -> Result<Value, ParserError>
         {
             undoable_deserialize(&self.0, info_provider, reader,update_info).await
@@ -3258,16 +3219,16 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,            
+            reader: &mut dyn SpecRead, update_info: bool,            
         ) -> Result<Value, ParserError>
         {
             undoable_deserialize(&self.0, info_provider, reader, update_info).await.map(|value| {
                 if update_info{
                     //let spec_name = info_provider.get_mapper_context().get_last_available_spec_name();
                     //info_provider.add_info(spec_name, value.clone());
-                    return Value::None;
+                    Value::None
                 }else {
-                    return value;
+                    value
                 }
             })
         }
@@ -3278,7 +3239,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,           
+            reader: &mut dyn SpecRead, update_info: bool,           
         ) -> Result<Value, ParserError>
         {
             undoable_deserialize(&self.0, info_provider, reader, update_info).await
@@ -3290,7 +3251,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: & (dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             //mapper_context.start_spec(self);
@@ -3299,12 +3260,12 @@ impl From<serde_json::Error> for ParserError {
         }
     }
 
-    async fn write_data(name: String, value:Option<&Value>, optional:bool, writer: &mut (dyn SpecWrite)) -> Result<(), ParserError>{
+    async fn write_data(name: String, value:Option<&Value>, optional:bool, writer: &mut dyn SpecWrite) -> Result<(), ParserError>{
         if let Some(value) = value{
                 write(value, writer).await?;
                 Ok(())
             }else if !optional {
-                return Err(ParserError::MissingData(name));
+                Err(ParserError::MissingData(name))
             }else{
                 Ok(())
             }
@@ -3385,7 +3346,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool,
+            reader: &mut dyn SpecRead, update_info: bool,
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(8)).await?;
             if let Some(bytes) = bytes {
@@ -3411,7 +3372,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool
+            reader: &mut dyn SpecRead, update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(8)).await?;
             if let Some(bytes) = bytes {
@@ -3437,7 +3398,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool
+            reader: &mut dyn SpecRead, update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(4)).await?;
             if let Some(bytes) = bytes {
@@ -3463,7 +3424,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool
+            reader: &mut dyn SpecRead, update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(4)).await?;
             if let Some(bytes) = bytes {
@@ -3489,7 +3450,7 @@ impl From<serde_json::Error> for ParserError {
         async fn deserialize(
             &self,
             info_provider: &mut (dyn InfoProvider + Send + Sync),
-            reader: &mut (dyn SpecRead), update_info: bool
+            reader: &mut dyn SpecRead, update_info: bool
         ) -> Result<Value, ParserError> {
             let bytes = reader.read_bytes(ReadBytesSize::Fixed(4)).await?;
             if let Some(bytes) = bytes {
@@ -3518,7 +3479,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync),
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             let name = self.0.get_name();
@@ -3535,7 +3496,7 @@ impl From<serde_json::Error> for ParserError {
         async fn serialize(
             &self,
             info_provider: &(dyn InfoProvider + Send + Sync), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite),            
+            writer: &mut dyn SpecWrite,            
         ) -> Result<(), ParserError>
         {
             let name = self.get_meta_data().get_name().to_name_string();
@@ -3572,7 +3533,6 @@ pub mod builders{
     pub trait BuildGenericString:BuilderState{}
 
     /// Builder States
-
     /// struct to represent the initial state of builder and a stating start for moving to other states
     /// Following transitions are possible
     /// BuildFromScratch -> BuildKey
@@ -3693,11 +3653,11 @@ pub mod builders{
         }
 
         fn wrap_with_data<D>(self, data:D)->BuilderWrapperWithData<Self, D, S>{
-            BuilderWrapperWithData(self, data, PhantomData::default())
+            BuilderWrapperWithData(self, data, PhantomData)
         }
 
         fn wrap(self) -> BuilderWrapper<Self, S>{
-            BuilderWrapper(self, PhantomData::default())
+            BuilderWrapper(self, PhantomData)
         }
     }
 
@@ -3728,8 +3688,7 @@ pub mod builders{
         }        
 
         pub fn new_with(name: SpecName, optional: bool) -> Self {
-            let result = ProtoSpecBuilderData::new_with_state(S::default(), name, optional);
-            result
+            ProtoSpecBuilderData::new_with_state(S::default(), name, optional)
         }
 
         pub fn new_from_scratch(name: SpecName, optional: bool) -> ProtoSpecBuilderData<BuildFromScratch> {
@@ -3866,7 +3825,7 @@ pub mod builders{
 
         {
             self.wrap_with_data(BuildInlineValue{                
-                value_spec_metadata:SpecMetaData { name:  key_name, value_type: ValueType::None, optional: optional }
+                value_spec_metadata:SpecMetaData { name:  key_name, value_type: ValueType::None, optional }
             }).into()
         }
     }
@@ -4192,7 +4151,7 @@ pub mod builders{
             let from_state = from_builder.replace_current_state_with_default();
             let mut result = ProtoSpecBuilderData::default();
             let key = Key(Box::new(value.1), from_state.key_spec_metadata);
-            result.set_state(BuildKeyAvailable { key: key });
+            result.set_state(BuildKeyAvailable { key });
             result.set_spec(from_builder.build());    
             result
         }
@@ -4409,35 +4368,34 @@ mod test_utils {
 
     use tracing::warn;
 
-    use crate::{core::{InfoProvider, Mapper, RequestInfo}, mapping_extractor::DefaultMapper};
+    use crate::{core::{InfoProvider, RequestInfo}, mapping_extractor::DefaultMapper};
 
     pub fn assert_result_has_string(
         result: Result<Option<Vec<u8>>, crate::core::ParserError>,
         data: String,
     ) {
-        match result {
-            Ok(Some(result_data)) => {
-                assert!(data == String::from_utf8(result_data).unwrap());
-            }
-            Ok(None) => {
-                assert!(false);
-            }
-            Err(e) => {
-                warn!("Error occured{}", e.to_string());
-                assert!(false);
-            }
+
+        if let Ok(option) = &result{
+            assert!(option.is_some(), "Expected Some value");
+        }else{
+            warn!("Error occured{:?}", result.as_ref().err());
+            assert!(result.is_ok(), "Expected Some value");
+        }
+        
+        if let  Ok(Some(result_data)) = result {
+            assert!(data == String::from_utf8(result_data).unwrap());
         }
     }
 
     //#[derive(Default)]
     #[derive(Debug)]
     #[allow(unused)]
-    pub struct TestRequestInfo(pub Box<dyn Mapper>, Vec<String>);
+    pub struct TestRequestInfo(pub DefaultMapper, Vec<String>);
 
     #[allow(unused)]
     impl TestRequestInfo {
         pub fn new() -> Self {
-            TestRequestInfo( Box::new(DefaultMapper::new()), Vec::new())
+            TestRequestInfo( DefaultMapper::new(), Vec::new())
         }
 
         pub fn add_simple_keys(&mut self, mut keys:Vec<String>){
@@ -4474,12 +4432,12 @@ mod test_utils {
             }
         }     */
         
-        fn get_mapper_mut(&mut self) ->&mut Box<dyn crate::core::Mapper> {
+        fn get_mapper_mut(&mut self) ->&mut dyn crate::core::Mapper {
             &mut self.0
         }
         
-        fn get_mapper(&self) ->&Box<dyn crate::core::Mapper> {
-            &self.0
+        fn get_mapper(&self) ->&dyn crate::core::Mapper {
+            & self.0
         }
         
         

@@ -296,12 +296,9 @@ impl ResponseInfo for HttpResponseInfo {
 use chrono::{DateTime, Utc};
 impl Default for HttpResponseInfo {
     fn default() -> Self {
-        
-        
-        let mut response = HttpResponseInfo {
+        HttpResponseInfo {
             mapper: Box::new(DefaultMapper::new()),
-        };
-        response
+        }
     }
 }
 
@@ -511,7 +508,7 @@ impl
         HttpResponseInfo,
     > for HttpRequestFactory
 {
-    fn get_request_spec(&self) -> &Box<dyn ProtocolSpec> {
+    fn get_request_spec(&self) -> &dyn ProtocolSpec {
         &self.spec
     }
 
@@ -567,7 +564,7 @@ impl ResponseErrorHandler<HttpResponseInfo> for HttpResponseHandler {
 impl ResponseFactory<HttpResponseInfo, DefaultSerializer, HttpResponseHandler, HttpResponseHandler>
     for HttpResponseFactory
 {
-    fn get_response_spec(&self) -> &Box<dyn ProtocolSpec> {
+    fn get_response_spec(&self) -> &dyn ProtocolSpec {
         &self.response_spec
     }
 
@@ -614,14 +611,13 @@ impl ProtocolConfig for HttpConfig {
 }
 
 impl InfoProvider for HttpResponseInfo {
-    fn get_info(&self, key: &String) -> Option<&Value> {
-        let key_ref = key.as_str();
-        match key_ref {
+    fn get_info(&self, key: &str) -> Option<&Value> {        
+        match key {
             "status_code" | "protocol_version" | "status_text" | "response_body"=> {
-                return self.get_mapper().get_value_by_key(key_ref);
+                self.get_mapper().get_value_by_key(key)
             }
             _ => {
-                return self.mapper.get_value_from_key_value_list(key_ref.to_owned(), "header_name");
+                self.mapper.get_value_from_key_value_list(key.to_owned(), "header_name")
             }
         }
     }
@@ -639,25 +635,25 @@ impl InfoProvider for HttpResponseInfo {
         Ok(())
     }
     
-    fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper> {
-        &mut self.mapper
+    fn get_mapper_mut(&mut self) ->&mut dyn Mapper {
+        &mut *self.mapper
     }
     
-    fn get_mapper(&self) ->&Box<dyn Mapper> {
-        &self.mapper
+    fn get_mapper(&self) ->&dyn Mapper {
+        &*self.mapper
     }
 }
 
 impl InfoProvider for HttpRequestInfo {
-    fn get_info(&self, key: &String) -> Option<&Value> {
-        let key_ref = key.as_str();
-        match key_ref {
+    fn get_info(&self, key: &str) -> Option<&Value> {
+        //let key_ref = key.as_str();
+        match key {
             "request_method" | "protocol_version" | "request_uri" | "request_body" => {
                 //self.mapper.add_mapping_template("proto_name".to_owned(), "spec_name".to_owned());
-                return self.get_mapper().get_value_by_key(key_ref);
+                self.get_mapper().get_value_by_key(key)
             }
             _ => {
-                return self.get_mapper().get_value_from_key_value_list(key.clone(),"header_name").clone();
+                self.get_mapper().get_value_from_key_value_list(key.to_owned(),"header_name")
             }
         }
     }
@@ -677,12 +673,12 @@ impl InfoProvider for HttpRequestInfo {
 
     
     
-    fn get_mapper_mut(&mut self) ->&mut Box<dyn Mapper> {
-        &mut self.mapper
+    fn get_mapper_mut(&mut self) ->&mut dyn Mapper {
+        &mut *self.mapper
     }
     
-    fn get_mapper(&self) ->&Box<dyn Mapper> {
-        &self.mapper
+    fn get_mapper(&self) ->&dyn Mapper {
+        &*self.mapper
     }
 }
 
@@ -756,7 +752,7 @@ pub struct BodySpec{
 impl BodySpec{
     pub fn new(name: SpecName, optional: bool) -> Self{        
         let spec_meta_data = SpecMetaData::new(name, ValueType::None, optional);
-        BodySpec { spec_meta_data: spec_meta_data }
+        BodySpec { spec_meta_data }
     }
 }
 
@@ -776,9 +772,9 @@ impl SpecDeserialize for BodySpec{
     async fn deserialize (
         &self,
         info_provider: &mut ( dyn InfoProvider + Send + Sync ),
-        reader: &mut (dyn SpecRead), update_info: bool,
+        reader: &mut dyn SpecRead, update_info: bool,
     ) -> Result<Value, ParserError>{
-        let content_length_option = info_provider.get_info(&"Content-Length".to_owned());
+        let content_length_option = info_provider.get_info("Content-Length");
         return match content_length_option{
             Some(value) => {
                 let content_length_str = value.get_string_value();
@@ -804,7 +800,7 @@ impl SpecSerialize for BodySpec{
     async fn serialize (
             &self,
             info_provider: & ( dyn InfoProvider + Send + Sync ), mapper_context: &mut MapperContext,
-            writer: &mut (dyn SpecWrite)
+            writer: &mut dyn SpecWrite
         ) -> Result<(), ParserError>{
             //mapper_context.start_spec(self);
             let spec_name = mapper_context.get_last_available_spec_name();

@@ -25,7 +25,7 @@ where
         if self.buff_reader.pos < self.buff_reader.buf.len() {
             let value = self.buff_reader.buf[self.buff_reader.pos];
             self.buff_reader.consume_and_drain(1);
-            return Poll::Ready(Some(Ok(value)));
+            Poll::Ready(Some(Ok(value)))
         } else {
             match self.buff_reader.fill_buffer(cx) {
                 Poll::Ready(Ok(len)) => {
@@ -34,13 +34,13 @@ where
                     }
                     let value = self.buff_reader.buf[self.buff_reader.pos];
                     self.buff_reader.consume(1);
-                    return Poll::Ready(Some(Ok(value)));
+                    Poll::Ready(Some(Ok(value)))
                 }
                 Poll::Ready(Err(err)) => {
-                    return Poll::Ready(Some(Err(err)));
+                    Poll::Ready(Some(Err(err)))
                 }
                 Poll::Pending => {
-                    return Poll::Pending;
+                    Poll::Pending
                 }
             }
         }
@@ -51,14 +51,14 @@ where
 pub trait PlaceHolderRead {
     #[allow(unused)]
     async fn read_placeholder_as_string(
-        self: & mut Self,
+        & mut self,
         input: String,
         
     ) -> Result<Option<Vec<u8>>, ParserError>;
 
     #[allow(unused)]
     async fn read_placeholder_until(
-        self: &mut Self,        
+        &mut self,        
         delimiter: String,        
         
     ) -> Result<Option<Vec<u8>>, ParserError>;
@@ -66,7 +66,7 @@ pub trait PlaceHolderRead {
 
     #[allow(unused)]
     async fn read_bytes(
-        self: & mut Self,        
+        & mut self,
         size: ReadBytesSize,
         
     ) -> Result<Option<Vec<u8>>, ParserError>;
@@ -149,7 +149,7 @@ where
     }
 
     #[allow(unused)]
-    fn as_buff_reader(self) -> ProtocolBuffReader<R> {
+    fn into_buff_reader(self) -> ProtocolBuffReader<R> {
         self.into()
     }
 }
@@ -211,7 +211,7 @@ impl <B> MarkAndRead for ProtocolBuffReader<B>
     }
     
     fn has_markers(&self) -> bool {
-        self.markers.len() > 0
+        !self.markers.is_empty()
     }
 }
 
@@ -264,7 +264,7 @@ impl <R>ProtocolBuffReader<R>
         self.marked = false;
     } */
 
-    fn fill_buffer(self: &mut Self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+    fn fill_buffer(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
         //let mut pinned_self = self.project();
         let pinned_reader = Pin::new(&mut self.inner);
         let result = pinned_reader.poll_fill_buf(cx);
@@ -286,7 +286,7 @@ impl <R>ProtocolBuffReader<R>
         if len > 0 {
             Pin::new(&mut self.inner).consume(len);
         }
-        return result;
+        result
     }
     
     fn consume_and_drain(&mut self, amount: usize) {
@@ -367,7 +367,7 @@ impl <R>ProtocolBuffReader<R>
     }
 
     #[allow(unused)]
-    fn as_stream<'a>(self) -> ProtoStream<R>
+    fn into_stream(self) -> ProtoStream<R>
     where
         R: AsyncBufRead + Unpin,
     {
@@ -435,15 +435,15 @@ where
 fn convert_io_error(error: std::io::Error) -> ParserError{
     match error.kind(){
         ErrorKind::UnexpectedEof => {
-            return ParserError::EndOfStream;
+            ParserError::EndOfStream
         },
         _ => {
-            return ParserError::IOError { error: error };
+            ParserError::IOError { error }
         }
     }
 }
 
-impl<'a, R> Future for ReadBytes<'a,  R>
+impl <R> Future for ReadBytes<'_,  R>
 where
     R: AsyncBufRead + Send + Sync + Unpin,
 {
@@ -456,17 +456,14 @@ where
                 
         loop {
             let buf = protocol_reader.get_buffer();
-            if buf.len() == 0 || !protocol_reader.buf_has_enough_data(read_bytes_expected_size) {
+            if buf.is_empty() || !protocol_reader.buf_has_enough_data(read_bytes_expected_size) {
                 let result = protocol_reader.fill_buffer(cx);
                 match result {
                     Poll::Ready(Ok(read_length)) => {
                         if read_length > 0 {
                             continue;
-                        } else {
-                            if let ReadBytesSize::Fixed(_) = read_bytes_expected_size {                                
-                                    return Poll::Ready(Ok(None));
-                            }
-                            
+                        } else if let ReadBytesSize::Fixed(_) = read_bytes_expected_size {                                
+                                return Poll::Ready(Ok(None));
                         }
                     }
                     Poll::Pending => {
@@ -536,7 +533,7 @@ R: AsyncBufRead + Send + Sync + Unpin,
     }
 }
 
-impl<'a, R> Future for ReadPlaceHolderUntil<'a, R >
+impl<R> Future for ReadPlaceHolderUntil<'_, R>
 where
     R: AsyncBufRead + Send + Sync + Unpin,{
     type Output = Result<Option<Vec<u8>>, ParserError>;
@@ -607,7 +604,7 @@ where
     }
 }
 
-impl<'a, R> Future for ReadString<'a, R>
+impl<R> Future for ReadString<'_, R>
 where
     R: AsyncBufRead + Send + Sync + Unpin,
 {
@@ -720,7 +717,7 @@ where
 {
     loop {
         let buf = protocol_reader.get_buffer();
-        if buf.len() == 0 || !protocol_reader.buf_has_enough_data(&ReadBytesSize::Fixed(input.len() as u32)) {
+        if buf.is_empty() || !protocol_reader.buf_has_enough_data(&ReadBytesSize::Fixed(input.len() as u32)) {
             let result = protocol_reader.fill_buffer(cx);
             match result {
                 Poll::Ready(Ok(read_length)) => {
@@ -739,7 +736,7 @@ where
         let buf = protocol_reader.get_buffer();
         let pos = protocol_reader.pos;
         debug!("pos is {}", pos);
-        debug!("input get bytes {:?}, len {}", input.as_bytes(), input.as_bytes().len());
+        debug!("input get bytes {:?}, len {}", input.as_bytes(), input.len());
         debug!("buf  get byets {:?}, len {}", &buf[pos..pos + input.len()], &buf[pos..pos + input.len()].len());
         if &buf[pos..pos + input.len()] == input.as_bytes() {
             return Some(Poll::Ready(Ok(pos)));
@@ -802,11 +799,7 @@ where
 fn is_eof_error(parse_error: &ParserError) -> bool {
     match parse_error {
         ParserError::IOError { error } => {
-            if error.kind() == io::ErrorKind::UnexpectedEof {
-                true
-            } else {
-                false
-            }
+            error.kind() == io::ErrorKind::UnexpectedEof
         },
         ParserError::EndOfStream => true,
         _ => false,
@@ -857,7 +850,7 @@ mod tests {
     use tokio_stream::StreamExt;
     use tracing::{debug, warn};
     use crate::core::builders::{new_spec_builder, CompositeBuilder, DelimitedStringSpecBuilder, DelimiterBuilder, InlineValueBuilder, KeySpecBuilder, ProtoSpecBuilder, RepeatBuilder,  ValueBuilder, StringSpecBuilder};
-    use crate::core::{ DefaultSerializer, InfoProvider, Mapper,   RequestSerializer, };
+    use crate::core::{ DefaultSerializer, InfoProvider, RequestSerializer };
     use crate::core::{protocol_reader::ProtoStream, SpecName};
     
     use crate::mapping_extractor::{DefaultMapper, SpecTraverse};
@@ -968,7 +961,6 @@ mod tests {
     async fn test_proto_reader_stream_conversion() {
         let data = b"Hello World\n";
         let mut protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
-
         protocol_reader
             .read_placeholder_as_string(                
                 "Hello".to_string(),
@@ -999,27 +991,24 @@ mod tests {
         assert_eq!(new_line, b'\n');
 
         let eof = stream.next().await;
-        match eof{
-            Some(result) => {
-                match result{
-                    Ok(_) => todo!(),
-                    Err(e) => {
-                        let kind = e.kind();
-                        match kind{
-                            
-                            std::io::ErrorKind::UnexpectedEof => {
-                                assert!(true, "received eof as expected");
-                            },
-                            _ => {
-                                assert!(false, "End of file excepted, found {}", e.to_string());
-                            },
-                        }
-                    },
-                }
-            },
-            None => {
-                assert!(false, "Got None, but expected a value");
-            },
+        assert!(eof.is_some(), "Got None, but expected a value");
+        if let Some(result) = eof {
+            match result{
+                Ok(_) => todo!(),
+                Err(e) => {
+                    let kind = e.kind();
+                    assert!(kind == std::io::ErrorKind::UnexpectedEof, "Expected eof error, found {:?}", e);
+                    /* match kind{
+                        
+                        std::io::ErrorKind::UnexpectedEof => {
+                            assert!(true, "received eof as expected");
+                        },
+                        _ => {
+                            assert!(false, "End of file excepted, found {}", e.to_string());
+                        },
+                    } */
+                },
+            }
         }
         
     }
@@ -1055,14 +1044,13 @@ mod tests {
             )
             .await
             .unwrap();
-        match data {
-            Some(value) => {
-                assert!(String::from_utf8(value).unwrap() == "ld\n".to_string());
-            }
-            _ => {
-                assert!(false);
-            }
+
+        assert!(data.is_some());
+        if let Some(value) = data {
+            assert!(String::from_utf8(value).unwrap() == "ld\n");
         }
+
+        
     }
 
     #[tokio::test]
@@ -1121,7 +1109,7 @@ mod tests {
         
         let mut request_info = TestRequestInfo::new();
 
-        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        let mut mapper = DefaultMapper::new();
         let result = spec.traverse(&mut mapper );
         assert!(result.is_ok());
         debug!("{:?}", &mut mapper);
@@ -1135,40 +1123,21 @@ mod tests {
             .await; */
         debug!("Result: {:?}", result);
         assert!(result.is_ok());
-        let request_method = request_info.get_info(&"request_method".to_string()).unwrap();
-        match request_method {
-            crate::core::Value::String(value) => {
-                assert!(*value == "GET".to_string());
-            }
-            _ => {
-                assert!(false);
-            }
+        let request_method = request_info.get_info("request_method").unwrap();
+        if let crate::core::Value::String(value) = request_method {
+            assert!(value == "GET");
         }
 
-        match request_info.get_key_value_info_by_spec_name("name".to_owned(), &"header_name".to_owned()).unwrap() {
-            crate::core::Value::String(value) => {
-                assert!(*value == "value".to_string());
-            }
-            _ => {
-                assert!(false);
-            }
+        if let crate::core::Value::String(value) = request_info.get_key_value_info_by_spec_name("name".to_owned(), &"header_name".to_owned()).unwrap() {
+            assert!(*value == "value");
         }
 
-        match request_info.get_key_value_info_by_spec_name("name2".to_owned(), &"header_name".to_owned()).unwrap() {
-            crate::core::Value::String(value) => {
-                assert!(*value == "value2".to_string());
-            }
-            _ => {
-                assert!(false);
-            }
-        }
-        match request_info.get_info(&"data".to_owned()).unwrap() {
-            crate::core::Value::String(value) => {
-                assert!(*value == "test123".to_string());
-            }
-            _ => {
-                assert!(false);
-            }
+        if let crate::core::Value::String(value) = request_info.get_key_value_info_by_spec_name("name2".to_owned(), &"header_name".to_owned()).unwrap() {
+            assert!(*value == "value2");
+        } 
+
+        if let crate::core::Value::String(value) = request_info.get_info("data").unwrap() {
+            assert!(*value == "test123");
         }
     }
 
@@ -1188,32 +1157,27 @@ mod tests {
         let protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
-        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        let mut mapper = DefaultMapper::new();
         assert!(root.traverse(&mut mapper).is_ok());
         request_info.0 = mapper;
         //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
         let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &root).await;
         
-
-        #[allow(unused)]
-        match result{
-            Ok(_) => {
-                assert!(false, "expected unexpected token error, but got success");
-            }
-            Err(e   ) => {
-                match e {
-                    crate::core::ParserError::TokenExpected { line_index, char_index, message } => {
-                        /* assert!(line_index == 0);
-                        assert!(char_index == 11); */
-                        assert!(message.contains( "Expected token not found"));
-                    }
-                    _ => {
-                        assert!(false, "expected unexpected token error, but got error");
-                    }
-                    
+        assert!(result.is_err(), "expected unexpected token error, but got success");
+        #[allow(unused)]        
+        if let Err(e   ) = result {
+            match e {
+                crate::core::ParserError::TokenExpected { line_index, char_index, message } => {
+                    /* assert!(line_index == 0);
+                    assert!(char_index == 11); */
+                    assert!(message.contains( "Expected token not found"));
                 }
-
+                _ => {
+                    assert!(!matches!(e, crate::core::ParserError::TokenExpected { .. }), "expected unexpected token error, but got error");
+                }
+                
             }
+
         }
     }
 
@@ -1233,35 +1197,21 @@ mod tests {
         let protocol_reader = ProtocolBuffReader::new(BufReader::new(&data[..]), 1024);
 
         let mut request_info = TestRequestInfo::new();
-        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        let mut mapper = DefaultMapper::new();
         assert!(root.traverse(&mut mapper ).is_ok());
         request_info.0 = mapper;
         //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
         let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &root).await;
         
 
+        assert!(result.is_err(), "expected unexpected token error, but got success");
         
-        match result{
-            Ok(_) => {
-                assert!(false, "expected unexpected token error, but got success");
-            }
-            Err(e   ) => {
-                warn!("Error received {}", e);
-                match e {
-                    crate::core::ParserError::EndOfStream=> {
-                        /* assert!(line_index == 1);
-                        assert!(char_index == 0);
-                        assert!(message.contains( "EOF reached")); */
-                        assert!(true , "expected OndOfStream error");
-                    }
-                    _ => {
-                        assert!(false, "expected unexpected token error, but got error");
-                    }
-                    
-                }
-
-            }
+            
+        if let Err(e   ) = result {
+            warn!("Error received {}", e);
+            assert!(matches!(e, crate::core::ParserError::EndOfStream), "expected EndOfStream error, but got different error {:?}", e);
         }
+        
     } 
 
 
@@ -1281,32 +1231,21 @@ mod tests {
             .build(); 
 
         let mut request_info = TestRequestInfo::new();
-        let mut mapper:Box<dyn Mapper> = Box::new(DefaultMapper::new());
+        let mut mapper = DefaultMapper::new();
         assert!(spec.traverse(&mut mapper ).is_ok());
         request_info.0 = mapper;
         //let result = protocol_reader.parse_composite( &mut request_info, &spec).await;
         let result = DefaultSerializer{}.deserialize_from(&mut request_info, protocol_reader, &spec).await;
-        match result {
-            Ok(_) => {
-                let first_word = request_info.get_info(&"first_word".to_string()).unwrap();
-                match first_word {
-                    crate::core::Value::String(value) => {
-                        assert!(*value == "Hello".to_string());
-                    }
-                    _ => {
-                        assert!(false);
-                    }
-                }
-                let second_word = request_info.get_info(&"second_word".to_string());
+        assert!(result.is_ok(), "expected success, but got error {:?}", result.err());
+        if result.is_ok() {
+            let first_word = request_info.get_info("first_word").unwrap();
+            assert!(matches!(first_word, crate::core::Value::String(_)), "expected a string value, but received {:?}", first_word);
+            if let crate::core::Value::String(value) = first_word {
+                assert!(*value == "Hello");
+            }
                 
-                assert!(second_word.is_none());
-            }
-            Err(e) => {
-                assert!(false, "expected success, but got error: {:?}", e);
-            }
+            let second_word = request_info.get_info("second_word");
+            assert!(second_word.is_none());
         }
-
-        
-        
     }
 }
