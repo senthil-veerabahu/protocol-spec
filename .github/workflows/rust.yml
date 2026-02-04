@@ -5,7 +5,11 @@ on:
     branches: [ "main", "develop" ]
   pull_request:
     branches: [ "main", "develop" ]
-
+  schedule:
+    # Run every day at midnight UTC
+    - cron: '0 0 * * *'
+  # Allows manual triggering from the Actions tab as well
+  workflow_dispatch:
 env:
   CARGO_TERM_COLOR: always
 
